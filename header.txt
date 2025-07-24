@@ -1,0 +1,50 @@
+  // Side Menu Component
+  const SideMenu = () => {
+    if (!showSideMenu) return null;
+
+    return (
+      <View style={styles.sideMenuOverlay}>
+        <TouchableOpacity style={styles.sideMenuBackdrop} onPress={() => setShowSideMenu(false)} />
+        <View style={styles.sideMenuContainer}>
+          <LinearGradient colors={['#8B5CF6', '#7C3AED']} style={styles.sideMenuContent}>
+            <View style={styles.sideMenuHeader}>
+              <TouchableOpacity style={styles.closeButton} onPress={() => setShowSideMenu(false)}>
+                <Text style={styles.closeIcon}>✕</Text>
+              </TouchableOpacity>
+              <Text style={styles.sideMenuTitle}>Inventor.io</Text>
+            </View>
+
+            <View style={styles.sideMenuItems}>
+              <TouchableOpacity style={styles.sideMenuItem} onPress={() => { setCurrentScreen('dashboard'); setShowSideMenu(false); }}>
+                <Text style={styles.sideMenuItemText}>Home</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.sideMenuItem} onPress={() => { setCurrentScreen('products'); setShowSideMenu(false); }}>
+                <Text style={styles.sideMenuItemText}>Products</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.sideMenuItem} onPress={() => { setCurrentScreen('categories'); setShowSideMenu(false); }}>
+                <Text style={styles.sideMenuItemText}>Categories</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.sideMenuItem}>
+                <Text style={styles.sideMenuItemText}>Stores</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.sideMenuItem}>
+                <Text style={styles.sideMenuItemText}>Finances</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.sideMenuItem}>
+                <Text style={styles.sideMenuItemText}>Settings</Text>
+              </TouchableOpacity>
+            </View>
+
+            <TouchableOpacity style={styles.logoutButton} onPress={() => {
+              setCurrentScreen('login');
+              setShowSideMenu(false);
+              setUsername('');
+              setPassword('');
+            }}>
+              <Text style={styles.logoutText}>Log out</Text>
+            </TouchableOpacity>
+          </LinearGradient>
+        </View>
+      </View>
+    );
+  };
