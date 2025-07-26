@@ -1,0 +1,20 @@
+<View style={styles.bottomNav}>
+          <TouchableOpacity style={styles.navItem} onPress={() => setCurrentScreen('dashboard')}>
+            <Text style={styles.navIcon}>🏠</Text>
+            <Text style={styles.navText}>Home</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.navItem}>
+            <Text style={styles.navIcon}>➕</Text>
+            <Text style={styles.navText}>Add</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.navItem} onPress={() => setCurrentScreen('products')}>
+            <Text style={styles.navIcon}>📦</Text>
+            <Text style={[styles.navText, { color: '#8B5CF6' }]}>Products</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.navItem} onPress={() => setCurrentScreen('categories')}>
+            <Text style={styles.navIcon}>📁</Text>
+            <Text style={styles.navText}>Categories</Text>
+          </TouchableOpacity>
+        </View>
+      </SafeAreaView>
+    );
