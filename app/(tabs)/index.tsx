@@ -56,7 +56,7 @@ const InventoryApp = () => {
     const fetchProducts = async () => {
       try {
         setLoading(true);
-        const response = await fetch('http://localhost:3000/api/products');
+        const response = await fetch('http://localhost:3008/api/products');
         const data = await response.json();
         if (response.ok) {
           setProducts(data);
