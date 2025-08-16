@@ -1,6 +1,7 @@
 import { LinearGradient } from 'expo-linear-gradient';
 import React, { useEffect, useState } from 'react';
 import {
+  Alert,
   Image,
   SafeAreaView,
   ScrollView,
@@ -12,7 +13,7 @@ import {
   View
 } from 'react-native';
 
-// Types
+// Types (unchanged from original)
 interface Product {
   id: string;
   name: string;
@@ -30,51 +31,137 @@ interface Product {
 }
 
 interface User {
+  id: number;
   username: string;
-  password: string;
+  email: string;
+  role: string;
 }
 
-// Mock user data
-const mockUser: User = {
-  username: '1',
-  password: '2',
-};
+const API_BASE_URL = 'http://localhost:3008/api';
 
 const InventoryApp = () => {
-  const [currentScreen, setCurrentScreen] = useState<'login' | 'dashboard' | 'products' | 'product-detail' | 'categories'>('login');
+  const [currentScreen, setCurrentScreen] = useState<'login' | 'register' | 'dashboard' | 'products' | 'product-detail' | 'categories'>('login');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  const [email, setEmail] = useState('');
   const [products, setProducts] = useState<Product[]>([]);
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [showSideMenu, setShowSideMenu] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [user, setUser] = useState<User | null>(null);
+  const [authToken, setAuthToken] = useState<string | null>(null);
 
-  // Fetch products from backend
-  useEffect(() => {
-    const fetchProducts = async () => {
-      try {
-        setLoading(true);
-        const response = await fetch('http://localhost:3008/api/products');
-        const data = await response.json();
-        if (response.ok) {
-          setProducts(data);
-          setError(null);
-        } else {
-          setError('Failed to load products');
-        }
-      } catch (err) {
-        setError('Error fetching products');
-      } finally {
-        setLoading(false);
-      }
+  // API Functions (unchanged)
+  const apiCall = async (endpoint: string, options: any = {}) => {
+    const config = {
+      ...options,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(authToken && { Authorization: `Bearer ${authToken}` }),
+        ...options.headers,
+      },
     };
 
-    fetchProducts();
-  }, []);
+    const response = await fetch(`${API_BASE_URL}${endpoint}`, config);
+    const data = await response.json();
 
-  // Side Menu Component
+    if (!response.ok) {
+      throw new Error(data.error || 'Something went wrong');
+    }
+
+    return data;
+  };
+
+  // Authentication Functions (unchanged)
+  const handleLogin = async () => {
+    try {
+      setLoading(true);
+      setError(null);
+
+      const response = await apiCall('/auth/login', {
+        method: 'POST',
+        body: JSON.stringify({ username, password }),
+      });
+
+      if (response.success) {
+        setAuthToken(response.token);
+        setUser(response.user);
+        setCurrentScreen('dashboard');
+        Alert.alert('Success', 'Login successful!');
+      }
+    } catch (err: any) {
+      setError(err.message);
+      Alert.alert('Error', err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleRegister = async () => {
+    try {
+      setLoading(true);
+      setError(null);
+
+      if (!username || !password) {
+        throw new Error('Username and password are required');
+      }
+
+      const response = await apiCall('/auth/register', {
+        method: 'POST',
+        body: JSON.stringify({ username, password, email }),
+      });
+
+      if (response.success) {
+        Alert.alert('Success', 'Registration successful! Please login.');
+        setCurrentScreen('login');
+        setEmail('');
+      }
+    } catch (err: any) {
+      setError(err.message);
+      Alert.alert('Error', err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleLogout = () => {
+    setAuthToken(null);
+    setUser(null);
+    setProducts([]);
+    setUsername('');
+    setPassword('');
+    setEmail('');
+    setCurrentScreen('login');
+    setShowSideMenu(false);
+    setSelectedProduct(null); // Clear selected product on logout
+  };
+
+  // Fetch products from backend
+  const fetchProducts = async () => {
+    if (!authToken) return;
+
+    try {
+      setLoading(true);
+      setError(null);
+      const data = await apiCall('/products');
+      setProducts(data);
+    } catch (err: any) {
+      setError(err.message);
+      Alert.alert('Error', 'Failed to load products: ' + err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (authToken && currentScreen === 'products') {
+      fetchProducts();
+    }
+  }, [authToken, currentScreen]);
+
+  // Side Menu Component (unchanged)
   const SideMenu = () => {
     if (!showSideMenu) return null;
 
@@ -89,6 +176,13 @@ const InventoryApp = () => {
               </TouchableOpacity>
               <Text style={styles.sideMenuTitle}>Inventor.io</Text>
             </View>
+
+            {user && (
+              <View style={styles.userInfo}>
+                <Text style={styles.userInfoText}>Welcome, {user.username}</Text>
+                <Text style={styles.userRoleText}>{user.role}</Text>
+              </View>
+            )}
 
             <View style={styles.sideMenuItems}>
               <TouchableOpacity style={styles.sideMenuItem} onPress={() => { setCurrentScreen('dashboard'); setShowSideMenu(false); }}>
@@ -111,12 +205,7 @@ const InventoryApp = () => {
               </TouchableOpacity>
             </View>
 
-            <TouchableOpacity style={styles.logoutButton} onPress={() => {
-              setCurrentScreen('login');
-              setShowSideMenu(false);
-              setUsername('');
-              setPassword('');
-            }}>
+            <TouchableOpacity style={styles.logoutButton} onPress={handleLogout}>
               <Text style={styles.logoutText}>Log out</Text>
             </TouchableOpacity>
           </LinearGradient>
@@ -125,7 +214,148 @@ const InventoryApp = () => {
     );
   };
 
-  // Product Detail Screen Component
+  // Register Screen Component (unchanged)
+  const RegisterScreen = () => {
+    return (
+      <SafeAreaView style={styles.container}>
+        <LinearGradient colors={['#8B5CF6', '#7C3AED']} style={styles.loginContainer}>
+          <StatusBar barStyle="light-content" />
+          <View style={styles.loginContent}>
+            <Text style={styles.loginTitle}>Sign Up</Text>
+            <Text style={styles.loginSubtitle}>Create your Inventor.io account</Text>
+            
+            <View style={styles.inputContainer}>
+              <Text style={styles.inputLabel}>Username</Text>
+              <TextInput
+                style={styles.input}
+                value={username}
+                onChangeText={setUsername}
+                placeholder="Enter your username"
+                placeholderTextColor="#ccc"
+                autoCapitalize="none"
+              />
+            </View>
+
+            <View style={styles.inputContainer}>
+              <Text style={styles.inputLabel}>Email (Optional)</Text>
+              <TextInput
+                style={styles.input}
+                value={email}
+                onChangeText={setEmail}
+                placeholder="Enter your email"
+                placeholderTextColor="#ccc"
+                keyboardType="email-address"
+                autoCapitalize="none"
+              />
+            </View>
+
+            <View style={styles.inputContainer}>
+              <Text style={styles.inputLabel}>Password</Text>
+              <TextInput
+                style={styles.input}
+                value={password}
+                onChangeText={setPassword}
+                placeholder="Enter your password"
+                placeholderTextColor="#ccc"
+                secureTextEntry
+              />
+            </View>
+
+            {error && (
+              <View style={styles.errorContainer}>
+                <Text style={styles.errorText}>{error}</Text>
+              </View>
+            )}
+
+            <TouchableOpacity 
+              style={[styles.loginButton, loading && styles.disabledButton]} 
+              onPress={handleRegister}
+              disabled={loading}
+            >
+              <Text style={styles.loginButtonText}>
+                {loading ? 'Creating Account...' : 'Sign Up'}
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity 
+              style={styles.switchScreenButton} 
+              onPress={() => setCurrentScreen('login')}
+            >
+              <Text style={styles.switchScreenText}>
+                Already have an account? Log in
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </LinearGradient>
+      </SafeAreaView>
+    );
+  };
+
+  // Login Screen Component (unchanged)
+  const LoginScreen = () => {
+    return (
+      <SafeAreaView style={styles.container}>
+        <LinearGradient colors={['#8B5CF6', '#7C3AED']} style={styles.loginContainer}>
+          <StatusBar barStyle="light-content" />
+          <View style={styles.loginContent}>
+            <Text style={styles.loginTitle}>Inventor.io</Text>
+            <Text style={styles.loginSubtitle}>Welcome back! Please login to your account</Text>
+            
+            <View style={styles.inputContainer}>
+              <Text style={styles.inputLabel}>Username</Text>
+              <TextInput
+                style={styles.input}
+                value={username}
+                onChangeText={setUsername}
+                placeholder="Enter your username"
+                placeholderTextColor="#ccc"
+                autoCapitalize="none"
+              />
+            </View>
+
+            <View style={styles.inputContainer}>
+              <Text style={styles.inputLabel}>Password</Text>
+              <TextInput
+                style={styles.input}
+                value={password}
+                onChangeText={setPassword}
+                placeholder="Enter your password"
+                placeholderTextColor="#ccc"
+                secureTextEntry
+              />
+            </View>
+
+            {error && (
+              <View style={styles.errorContainer}>
+                <Text style={styles.errorText}>{error}</Text>
+              </View>
+            )}
+
+            <TouchableOpacity 
+              style={[styles.loginButton, loading && styles.disabledButton]} 
+              onPress={handleLogin}
+              disabled={loading}
+            >
+              <Text style={styles.loginButtonText}>
+                {loading ? 'Logging in...' : 'Log in'}
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity 
+              style={styles.switchScreenButton} 
+              onPress={() => setCurrentScreen('register')}
+            >
+              <Text style={styles.switchScreenText}>
+                Don't have an account? Sign up
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </LinearGradient>
+      </SafeAreaView>
+    );
+  };
+
+  // Product Detail Screen Component (fixed)
   const ProductDetailScreen = () => {
     if (!selectedProduct) return null;
 
@@ -133,10 +363,16 @@ const InventoryApp = () => {
       <SafeAreaView style={styles.container}>
         <StatusBar barStyle="dark-content" backgroundColor="#f8f9fa" />
         <View style={styles.header}>
-          <TouchableOpacity style={styles.menuButton} onPress={() => setCurrentScreen('products')}>
+          <TouchableOpacity 
+            style={styles.menuButton} 
+            onPress={() => {
+              setCurrentScreen('products');
+              setSelectedProduct(null); // Clear selected product
+            }}
+          >
             <Text style={styles.menuIcon}>←</Text>
           </TouchableOpacity>
-          <Text style={styles.headerTitle}>Products</Text>
+          <Text style={styles.headerTitle}>Product Details</Text>
           <TouchableOpacity style={styles.profileButton}>
             <Text style={styles.profileIcon}>👤</Text>
           </TouchableOpacity>
@@ -152,10 +388,11 @@ const InventoryApp = () => {
           <Text style={styles.productDetailCategory}>Category: {selectedProduct.category}</Text>
 
           <View style={styles.productDetailCard}>
-            <Text style={styles.productDetailCardTitle}>Gender: Male, Female</Text>
             <View style={styles.productDetailInfo}>
               <Text style={styles.productDetailLabel}>Product code: {selectedProduct.productCode}</Text>
               <Text style={styles.productDetailLabel}>Order name: {selectedProduct.orderName}</Text>
+              <Text style={styles.productDetailLabel}>Stock: {selectedProduct.stock} items</Text>
+              <Text style={styles.productDetailLabel}>Status: {selectedProduct.status}</Text>
             </View>
             <View style={styles.qrCodeContainer}>
               <View style={styles.qrCodePlaceholder}>
@@ -180,11 +417,11 @@ const InventoryApp = () => {
             <Text style={styles.navIcon}>🏠</Text>
             <Text style={styles.navText}>Home</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.navItem}>
+          <TouchableOpacity style={styles.navItem} onPress={() => Alert.alert('Info', 'Add product functionality coming soon!')}>
             <Text style={styles.navIcon}>➕</Text>
             <Text style={styles.navText}>Add</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.navItem} onPress={() => setCurrentScreen('products')}>
+          <TouchableOpacity style={styles.navItem} onPress={() => { setCurrentScreen('products'); setSelectedProduct(null); }}>
             <Text style={styles.navIcon}>📦</Text>
             <Text style={[styles.navText, { color: '#8B5CF6' }]}>Products</Text>
           </TouchableOpacity>
@@ -197,14 +434,29 @@ const InventoryApp = () => {
     );
   };
 
-  // Categories Screen Component
+  // Categories Screen Component (completed)
   const CategoriesScreen = () => {
-    const categories = [
-      { id: '1', name: 'Bottoms', count: 49, icon: '👕' },
-      { id: '2', name: 'Coats', count: 23, icon: '🧥' },
-      { id: '3', name: 'Jeans', count: 11, icon: '👖' },
-      { id: '4', name: 'Tops', count: 7, icon: '👔' },
-    ];
+    // Create categories from products
+    const categories = Array.from(new Set(products.map(p => p.category)))
+      .map(category => ({
+        id: category,
+        name: category,
+        count: products.filter(p => p.category === category).length,
+        icon: getCategoryIcon(category)
+      }));
+
+    function getCategoryIcon(category: string): string {
+      const iconMap: { [key: string]: string } = {
+        'bottoms': '👖',
+        'coats': '🧥',
+        'jeans': '👖',
+        'tops': '👕',
+        'shirts': '👔',
+        'accessories': '👜',
+        'shoes': '👟'
+      };
+      return iconMap[category.toLowerCase()] || '📦';
+    }
 
     return (
       <SafeAreaView style={styles.container}>
@@ -219,34 +471,103 @@ const InventoryApp = () => {
           </TouchableOpacity>
         </View>
 
-        <ScrollView style={styles.categoriesContainer}>
-          {categories.map((category) => (
-            <View key={category.id} style={styles.categoryCard}>
-              <View style={styles.categoryIconContainer}>
-                <Text style={styles.categoryIconText}>{category.icon}</Text>
+        <View style={styles.searchContainer}>
+          <View style={styles.searchBar}>
+            <Text style={styles.searchIcon}>🔍</Text>
+            <TextInput
+              style={styles.searchInput}
+              placeholder="Search categories..."
+              placeholderTextColor="#999"
+              value={searchQuery}
+              onChangeText={setSearchQuery}
+            />
+            {searchQuery.length > 0 && (
+              <TouchableOpacity style={styles.clearSearchButton} onPress={() => setSearchQuery('')}>
+                <Text style={styles.clearSearchText}>✕</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+        </View>
+
+        {loading && (
+          <View style={styles.noResultsContainer}>
+            <Text style={styles.noResultsText}>Loading categories...</Text>
+          </View>
+        )}
+        {error && (
+          <View style={styles.noResultsContainer}>
+            <Text style={styles.noResultsText}>Error: {error}</Text>
+            <TouchableOpacity style={styles.clearSearchButton2} onPress={fetchProducts}>
+              <Text style={styles.clearSearchButtonText}>Retry</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
+        {!loading && !error && searchQuery.length > 0 && (
+          <View style={styles.searchResultsInfo}>
+            <Text style={styles.searchResultsText}>
+              {categories.filter(c => c.name.toLowerCase().includes(searchQuery.toLowerCase())).length} {categories.length === 1 ? 'result' : 'results'} found
+            </Text>
+            <TouchableOpacity onPress={() => setSearchQuery('')}>
+              <Text style={styles.clearSearchLink}>Clear search</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
+        {!loading && !error && (
+          <ScrollView style={styles.categoriesContainer}>
+            {categories.filter(c => c.name.toLowerCase().includes(searchQuery.toLowerCase())).length === 0 && searchQuery.length > 0 ? (
+              <View style={styles.noResultsContainer}>
+                <Text style={styles.noResultsText}>No categories found</Text>
+                <Text style={styles.noResultsSubtext}>Try a different search term</Text>
+                <TouchableOpacity style={styles.clearSearchButton2} onPress={() => setSearchQuery('')}>
+                  <Text style={styles.clearSearchButtonText}>Clear Search</Text>
+                </TouchableOpacity>
               </View>
-              <View style={styles.categoryInfo}>
-                <Text style={styles.categoryName}>{category.name}</Text>
-                <Text style={styles.categoryCount}>{category.count} items</Text>
+            ) : categories.length === 0 ? (
+              <View style={styles.noResultsContainer}>
+                <Text style={styles.noResultsText}>No categories available</Text>
+                <Text style={styles.noResultsSubtext}>Add products to see categories</Text>
               </View>
-            </View>
-          ))}
-        </ScrollView>
+            ) : (
+              categories
+                .filter(c => c.name.toLowerCase().includes(searchQuery.toLowerCase()))
+                .map((category) => (
+                  <TouchableOpacity 
+                    key={category.id} 
+                    style={styles.categoryCard}
+                    onPress={() => {
+                      setSearchQuery(category.name);
+                      setCurrentScreen('products');
+                    }}
+                  >
+                    <View style={styles.categoryIconContainer}>
+                      <Text style={styles.categoryIconText}>{category.icon}</Text>
+                    </View>
+                    <View style={styles.categoryInfo}>
+                      <Text style={styles.categoryName}>{category.name}</Text>
+                      <Text style={styles.categoryCount}>{category.count} items</Text>
+                    </View>
+                  </TouchableOpacity>
+                ))
+            )}
+          </ScrollView>
+        )}
 
         <View style={styles.bottomNav}>
-          <TouchableOpacity style={styles.navItem} onPress={() => setCurrentScreen('dashboard')}>
+          <TouchableOpacity style={styles.navItem} onPress={() => { setSearchQuery(''); setCurrentScreen('dashboard'); }}>
             <Text style={styles.navIcon}>🏠</Text>
             <Text style={styles.navText}>Home</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.navItem}>
+          <TouchableOpacity style={styles.navItem} onPress={() => Alert.alert('Info', 'Add product functionality coming soon!')}>
             <Text style={styles.navIcon}>➕</Text>
             <Text style={styles.navText}>Add</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.navItem} onPress={() => setCurrentScreen('products')}>
+          <TouchableOpacity style={styles.navItem} onPress={() => { setSearchQuery(''); setCurrentScreen('products'); }}>
             <Text style={styles.navIcon}>📦</Text>
             <Text style={styles.navText}>Products</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.navItem} onPress={() => setCurrentScreen('categories')}>
+          <TouchableOpacity style={styles.navItem} onPress={() => { setSearchQuery(''); setCurrentScreen('categories'); }}>
             <Text style={styles.navIcon}>📁</Text>
             <Text style={[styles.navText, { color: '#8B5CF6' }]}>Categories</Text>
           </TouchableOpacity>
@@ -255,67 +576,20 @@ const InventoryApp = () => {
     );
   };
 
-  // Login Screen Component
-  const LoginScreen = () => {
-    const handleLogin = () => {
-      if (username === mockUser.username && password === mockUser.password) {
-        setCurrentScreen('dashboard');
-      } else {
-        alert('Invalid credentials');
-      }
-    };
-
-    return (
-      <SafeAreaView style={styles.container}>
-        <LinearGradient colors={['#8B5CF6', '#7C3AED']} style={styles.loginContainer}>
-          <StatusBar barStyle="light-content" />
-          <View style={styles.loginContent}>
-            <Text style={styles.loginTitle}>Inventor.io</Text>
-            <View style={styles.inputContainer}>
-              <Text style={styles.inputLabel}>Username</Text>
-              <TextInput
-                style={styles.input}
-                value={username}
-                onChangeText={setUsername}
-                placeholder=""
-                placeholderTextColor="#ccc"
-              />
-            </View>
-            <View style={styles.inputContainer}>
-              <Text style={styles.inputLabel}>Password</Text>
-              <TextInput
-                style={styles.input}
-                value={password}
-                onChangeText={setPassword}
-                placeholder=""
-                placeholderTextColor="#ccc"
-                secureTextEntry
-              />
-            </View>
-            <TouchableOpacity style={styles.loginButton} onPress={handleLogin}>
-              <Text style={styles.loginButtonText}>Log in</Text>
-            </TouchableOpacity>
-          </View>
-        </LinearGradient>
-      </SafeAreaView>
-    );
-  };
-
-  // Dashboard Screen Component
+  // Dashboard Screen Component (unchanged except for Add button)
   const DashboardScreen = () => {
     const activityData = [
-      { label: 'NEW ITEMS', value: 741, color: '#8B5CF6' },
-      { label: 'NEW ORDERS', value: 123, color: '#8B5CF6' },
-      { label: 'REFUNDS', value: 12, color: '#8B5CF6' },
-      { label: 'MESSAGE', value: 1, color: '#8B5CF6' },
-      { label: 'GROUPS', value: 4, color: '#8B5CF6' },
+      { label: 'TOTAL PRODUCTS', value: products.length, color: '#8B5CF6' },
+      { label: 'LOW STOCK', value: products.filter(p => p.stock < 10).length, color: '#ef4444' },
+      { label: 'CATEGORIES', value: new Set(products.map(p => p.category)).size, color: '#22c55e' },
+      { label: 'ACTIVE ITEMS', value: products.filter(p => p.status === 'Active').length, color: '#8B5CF6' },
     ];
 
     const salesData = [
-      { label: 'Confirmed', value: 40, color: '#8B5CF6' },
-      { label: 'Packed', value: 80, color: '#8B5CF6' },
-      { label: 'Refunded', value: 60, color: '#8B5CF6' },
-      { label: 'Shipped', value: 100, color: '#7C3AED' },
+      { label: 'Active', value: products.filter(p => p.status === 'Active').length * 2, color: '#22c55e' },
+      { label: 'Inactive', value: products.filter(p => p.status === 'Inactive').length * 2, color: '#ef4444' },
+      { label: 'Low Stock', value: products.filter(p => p.stock < 10).length * 3, color: '#f59e0b' },
+      { label: 'In Stock', value: products.filter(p => p.stock >= 10).length * 2, color: '#8B5CF6' },
     ];
 
     return (
@@ -333,28 +607,26 @@ const InventoryApp = () => {
 
         <ScrollView style={styles.dashboardContent}>
           <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Recent activity</Text>
+            <Text style={styles.sectionTitle}>Inventory Overview</Text>
             <View style={styles.activityGrid}>
               {activityData.map((item, index) => (
                 <View key={index} style={styles.activityCard}>
-                  <Text style={styles.activityValue}>{item.value}</Text>
+                  <Text style={[styles.activityValue, { color: item.color }]}>{item.value}</Text>
                   <Text style={styles.activityLabel}>{item.label}</Text>
                 </View>
               ))}
-              <TouchableOpacity style={styles.viewMoreButton}>
-                <Text style={styles.viewMoreText}>|</Text>
-              </TouchableOpacity>
             </View>
           </View>
 
           <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Sales</Text>
+            <Text style={styles.sectionTitle}>Product Status Distribution</Text>
             <View style={styles.chartContainer}>
               <View style={styles.chartBars}>
                 {salesData.map((item, index) => (
                   <View key={index} style={styles.barContainer}>
-                    <View style={[styles.bar, { height: item.value, backgroundColor: item.color }]} />
+                    <View style={[styles.bar, { height: Math.max(item.value * 2, 10), backgroundColor: item.color }]} />
                     <Text style={styles.barLabel}>{item.label}</Text>
+                    <Text style={styles.barValue}>{item.value}</Text>
                   </View>
                 ))}
               </View>
@@ -362,58 +634,79 @@ const InventoryApp = () => {
           </View>
 
           <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Top item categories</Text>
+            <Text style={styles.sectionTitle}>Top Categories</Text>
             <View style={styles.categoryIconsGrid}>
-              <View style={styles.categoryIconCard}><Text style={styles.categoryIcon}>👕</Text></View>
-              <View style={styles.categoryIconCard}><Text style={styles.categoryIcon}>👖</Text></View>
-              <View style={styles.categoryIconCard}><Text style={styles.categoryIcon}>👜</Text></View>
-              <View style={styles.categoryIconCard}><Text style={styles.categoryIcon}>🧥</Text></View>
-              <View style={styles.categoryIconCard}><Text style={styles.categoryIcon}>👔</Text></View>
-              <View style={styles.categoryIconCard}><Text style={styles.categoryIcon}>👓</Text></View>
+              {Array.from(new Set(products.map(p => p.category))).slice(0, 6).map((category, index) => (
+                <TouchableOpacity 
+                  key={index} 
+                  style={styles.categoryIconCard}
+                  onPress={() => {
+                    setSearchQuery(category);
+                    setCurrentScreen('products');
+                  }}
+                >
+                  <Text style={styles.categoryIcon}>
+                    {category.toLowerCase().includes('bottom') || category.toLowerCase().includes('jean') ? '👖' :
+                     category.toLowerCase().includes('top') || category.toLowerCase().includes('shirt') ? '👕' :
+                     category.toLowerCase().includes('coat') || category.toLowerCase().includes('jacket') ? '🧥' :
+                     category.toLowerCase().includes('shoe') ? '👟' :
+                     category.toLowerCase().includes('access') ? '👜' : '📦'}
+                  </Text>
+                  <Text style={styles.categoryName2}>{category}</Text>
+                </TouchableOpacity>
+              ))}
             </View>
-            <TouchableOpacity style={styles.viewMoreLink}>
+            <TouchableOpacity style={styles.viewMoreLink} onPress={() => setCurrentScreen('categories')}>
               <Text style={styles.viewMoreLinkText}>View more</Text>
             </TouchableOpacity>
           </View>
 
           <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Top item categories</Text>
+            <Text style={styles.sectionTitle}>Inventory Statistics</Text>
             <View style={styles.categoryStatsCard}>
               <View style={styles.categoryStatRow}>
                 <Text style={styles.categoryStatLabel}>Low stock items</Text>
                 <View style={styles.categoryStatValue}>
-                  <Text style={styles.categoryStatNumber}>12</Text>
+                  <Text style={[styles.categoryStatNumber, { color: '#ef4444' }]}>
+                    {products.filter(p => p.stock < 10).length}
+                  </Text>
                   <Text style={styles.categoryStatIcon}>⚠️</Text>
                 </View>
               </View>
               <View style={styles.categoryStatRow}>
                 <Text style={styles.categoryStatLabel}>Item categories</Text>
-                <Text style={styles.categoryStatNumber}>6</Text>
+                <Text style={styles.categoryStatNumber}>{new Set(products.map(p => p.category)).size}</Text>
               </View>
               <View style={styles.categoryStatRow}>
-                <Text style={styles.categoryStatLabel}>Refunded items</Text>
-                <Text style={styles.categoryStatNumber}>1</Text>
+                <Text style={styles.categoryStatLabel}>Total products</Text>
+                <Text style={styles.categoryStatNumber}>{products.length}</Text>
+              </View>
+              <View style={styles.categoryStatRow}>
+                <Text style={styles.categoryStatLabel}>Active products</Text>
+                <Text style={[styles.categoryStatNumber, { color: '#22c55e' }]}>
+                  {products.filter(p => p.status === 'Active').length}
+                </Text>
               </View>
             </View>
           </View>
 
           <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Stores list</Text>
+            <Text style={styles.sectionTitle}>Quick Actions</Text>
             <View style={styles.storesListCard}>
-              <TouchableOpacity style={styles.storeItem}>
-                <Text style={styles.storeLocation}>Manchester, UK</Text>
+              <TouchableOpacity style={styles.storeItem} onPress={() => setCurrentScreen('products')}>
+                <Text style={styles.storeLocation}>View All Products</Text>
+                <Text style={styles.storeArrow}>›</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.storeItem} onPress={() => setCurrentScreen('categories')}>
+                <Text style={styles.storeLocation}>Browse Categories</Text>
+                <Text style={styles.storeArrow}>›</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.storeItem} onPress={() => Alert.alert('Info', 'Add product functionality coming soon!')}>
+                <Text style={styles.storeLocation}>Add New Product</Text>
                 <Text style={styles.storeArrow}>›</Text>
               </TouchableOpacity>
               <TouchableOpacity style={styles.storeItem}>
-                <Text style={styles.storeLocation}>Yorkshire, UK</Text>
-                <Text style={styles.storeArrow}>›</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.storeItem}>
-                <Text style={styles.storeLocation}>Hull, UK</Text>
-                <Text style={styles.storeArrow}>›</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.storeItem}>
-                <Text style={styles.storeLocation}>Leicester, UK</Text>
+                <Text style={styles.storeLocation}>Low Stock Alert</Text>
                 <Text style={styles.storeArrow}>›</Text>
               </TouchableOpacity>
             </View>
@@ -421,19 +714,19 @@ const InventoryApp = () => {
         </ScrollView>
 
         <View style={styles.bottomNav}>
-          <TouchableOpacity style={styles.navItem} onPress={() => setCurrentScreen('dashboard')}>
+          <TouchableOpacity style={styles.navItem} onPress={() => { setSearchQuery(''); setCurrentScreen('dashboard'); }}>
             <Text style={styles.navIcon}>🏠</Text>
             <Text style={[styles.navText, { color: '#8B5CF6' }]}>Home</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.navItem}>
+          <TouchableOpacity style={styles.navItem} onPress={() => Alert.alert('Info', 'Add product functionality coming soon!')}>
             <Text style={styles.navIcon}>➕</Text>
             <Text style={styles.navText}>Add</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.navItem} onPress={() => setCurrentScreen('products')}>
+          <TouchableOpacity style={styles.navItem} onPress={() => { setSearchQuery(''); setCurrentScreen('products'); }}>
             <Text style={styles.navIcon}>📦</Text>
-            <Text style={styles.navText}>Product</Text>
+            <Text style={styles.navText}>Products</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.navItem} onPress={() => setCurrentScreen('categories')}>
+          <TouchableOpacity style={styles.navItem} onPress={() => { setSearchQuery(''); setCurrentScreen('categories'); }}>
             <Text style={styles.navIcon}>📁</Text>
             <Text style={styles.navText}>Categories</Text>
           </TouchableOpacity>
@@ -442,10 +735,12 @@ const InventoryApp = () => {
     );
   };
 
-  // Products Screen Component
+  // Products Screen Component (unchanged except for Add button)
   const ProductsScreen = () => {
     const filteredProducts = products.filter((product) =>
-      product.name.toLowerCase().includes(searchQuery.toLowerCase())
+      product.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      product.category.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      product.brand.toLowerCase().includes(searchQuery.toLowerCase())
     );
 
     return (
@@ -477,11 +772,14 @@ const InventoryApp = () => {
               </TouchableOpacity>
             )}
           </View>
-          <TouchableOpacity style={styles.addButton}>
-            <Text style={styles.addButtonText}>+ Add Product</Text>
+          <TouchableOpacity 
+            style={styles.addButton}
+            onPress={() => Alert.alert('Info', 'Add product functionality coming soon!')}
+          >
+            <Text style={styles.addButtonText}>+ Add</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.filterButton}>
-            <Text style={styles.filterText}>Filter ▼</Text>
+          <TouchableOpacity style={styles.filterButton} onPress={fetchProducts}>
+            <Text style={styles.filterText}>Refresh</Text>
           </TouchableOpacity>
         </View>
 
@@ -492,7 +790,10 @@ const InventoryApp = () => {
         )}
         {error && (
           <View style={styles.noResultsContainer}>
-            <Text style={styles.noResultsText}>{error}</Text>
+            <Text style={styles.noResultsText}>Error: {error}</Text>
+            <TouchableOpacity style={styles.clearSearchButton2} onPress={fetchProducts}>
+              <Text style={styles.clearSearchButtonText}>Retry</Text>
+            </TouchableOpacity>
           </View>
         )}
 
@@ -517,6 +818,11 @@ const InventoryApp = () => {
                   <Text style={styles.clearSearchButtonText}>Clear Search</Text>
                 </TouchableOpacity>
               </View>
+            ) : filteredProducts.length === 0 && products.length === 0 ? (
+              <View style={styles.noResultsContainer}>
+                <Text style={styles.noResultsText}>No products available</Text>
+                <Text style={styles.noResultsSubtext}>Add some products to get started</Text>
+              </View>
             ) : (
               filteredProducts.map((product) => (
                 <View key={product.id} style={styles.productCard}>
@@ -526,9 +832,10 @@ const InventoryApp = () => {
                       <Text style={styles.stockText}>Stock: {product.stock} in stock</Text>
                       <Text style={styles.categoryText}>Category: {product.category}</Text>
                       <Text style={styles.locationText}>Location: {product.location}</Text>
+                      <Text style={styles.brandText}>Brand: {product.brand}</Text>
                     </View>
                     <View style={styles.productActions}>
-                      <TouchableOpacity style={styles.statusButton}>
+                      <TouchableOpacity style={[styles.statusButton, { backgroundColor: product.status === 'Active' ? '#22c55e' : '#ef4444' }]}>
                         <Text style={styles.statusText}>{product.status}</Text>
                       </TouchableOpacity>
                       <TouchableOpacity style={styles.moreButton} onPress={() => {
@@ -547,19 +854,19 @@ const InventoryApp = () => {
         )}
 
         <View style={styles.bottomNav}>
-          <TouchableOpacity style={styles.navItem} onPress={() => setCurrentScreen('dashboard')}>
+          <TouchableOpacity style={styles.navItem} onPress={() => { setSearchQuery(''); setCurrentScreen('dashboard'); }}>
             <Text style={styles.navIcon}>🏠</Text>
             <Text style={styles.navText}>Home</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.navItem}>
+          <TouchableOpacity style={styles.navItem} onPress={() => Alert.alert('Info', 'Add product functionality coming soon!')}>
             <Text style={styles.navIcon}>➕</Text>
             <Text style={styles.navText}>Add</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.navItem} onPress={() => setCurrentScreen('products')}>
+          <TouchableOpacity style={styles.navItem} onPress={() => { setSearchQuery(''); setCurrentScreen('products'); }}>
             <Text style={styles.navIcon}>📦</Text>
             <Text style={[styles.navText, { color: '#8B5CF6' }]}>Products</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.navItem} onPress={() => setCurrentScreen('categories')}>
+          <TouchableOpacity style={styles.navItem} onPress={() => { setSearchQuery(''); setCurrentScreen('categories'); }}>
             <Text style={styles.navIcon}>📁</Text>
             <Text style={styles.navText}>Categories</Text>
           </TouchableOpacity>
@@ -572,6 +879,7 @@ const InventoryApp = () => {
   return (
     <>
       {currentScreen === 'login' && <LoginScreen />}
+      {currentScreen === 'register' && <RegisterScreen />}
       {currentScreen === 'dashboard' && <DashboardScreen />}
       {currentScreen === 'products' && <ProductsScreen />}
       {currentScreen === 'product-detail' && <ProductDetailScreen />}
@@ -581,7 +889,7 @@ const InventoryApp = () => {
   );
 };
 
-// Styles (from your provided code)
+// Styles (unchanged)
 const styles = StyleSheet.create({
   container: {
     flex: 1,
@@ -603,7 +911,13 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     color: 'white',
     textAlign: 'center',
-    marginBottom: 50,
+    marginBottom: 10,
+  },
+  loginSubtitle: {
+    fontSize: 16,
+    color: 'rgba(255, 255, 255, 0.8)',
+    textAlign: 'center',
+    marginBottom: 40,
   },
   inputContainer: {
     marginBottom: 20,
@@ -630,10 +944,51 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(255, 255, 255, 0.3)',
   },
+  disabledButton: {
+    opacity: 0.6,
+  },
   loginButtonText: {
     color: 'white',
     fontSize: 18,
     fontWeight: '600',
+  },
+  switchScreenButton: {
+    marginTop: 20,
+    alignItems: 'center',
+  },
+  switchScreenText: {
+    color: 'rgba(255, 255, 255, 0.8)',
+    fontSize: 16,
+    textDecorationLine: 'underline',
+  },
+  errorContainer: {
+    backgroundColor: 'rgba(239, 68, 68, 0.1)',
+    borderRadius: 8,
+    padding: 12,
+    marginTop: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(239, 68, 68, 0.3)',
+  },
+  errorText: {
+    color: '#ef4444',
+    fontSize: 14,
+    textAlign: 'center',
+  },
+  userInfo: {
+    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+    borderRadius: 8,
+    padding: 15,
+    marginBottom: 20,
+  },
+  userInfoText: {
+    color: 'white',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  userRoleText: {
+    color: 'rgba(255, 255, 255, 0.8)',
+    fontSize: 14,
+    textTransform: 'capitalize',
   },
   header: {
     flexDirection: 'row',
@@ -714,19 +1069,6 @@ const styles = StyleSheet.create({
     color: '#666',
     textAlign: 'center',
   },
-  viewMoreButton: {
-    backgroundColor: '#8B5CF6',
-    borderRadius: 20,
-    width: 40,
-    height: 40,
-    justifyContent: 'center',
-    alignItems: 'center',
-    alignSelf: 'flex-end',
-  },
-  viewMoreText: {
-    color: 'white',
-    fontSize: 12,
-  },
   chartContainer: {
     backgroundColor: 'white',
     borderRadius: 12,
@@ -750,10 +1092,17 @@ const styles = StyleSheet.create({
     width: 20,
     borderRadius: 10,
     marginBottom: 10,
+    minHeight: 10,
   },
   barLabel: {
     fontSize: 12,
     color: '#666',
+    textAlign: 'center',
+    marginBottom: 4,
+  },
+  barValue: {
+    fontSize: 10,
+    color: '#999',
     textAlign: 'center',
   },
   categoryIconsGrid: {
@@ -773,6 +1122,12 @@ const styles = StyleSheet.create({
   },
   categoryIcon: {
     fontSize: 24,
+  },
+  categoryName2: {
+    fontSize: 10,
+    color: '#666',
+    textAlign: 'center',
+    marginTop: 5,
   },
   viewMoreLink: {
     alignItems: 'flex-end',
@@ -936,6 +1291,11 @@ const styles = StyleSheet.create({
   locationText: {
     fontSize: 14,
     color: '#666',
+    marginBottom: 2,
+  },
+  brandText: {
+    fontSize: 14,
+    color: '#666',
   },
   productActions: {
     flexDirection: 'row',
@@ -1016,7 +1376,7 @@ const styles = StyleSheet.create({
   sideMenuHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 40,
+    marginBottom: 20,
   },
   closeButton: {
     marginRight: 20,
@@ -1215,14 +1575,7 @@ const styles = StyleSheet.create({
   noResultsSubtext: {
     fontSize: 14,
     color: '#999',
-  },
-  debugText: {
-    fontSize: 12,
-    color: '#999',
-    padding: 10,
-    backgroundColor: '#f0f0f0',
-    marginBottom: 10,
-    borderRadius: 4,
+    textAlign: 'center',
   },
   clearSearchButton: {
     padding: 5,
@@ -1245,18 +1598,6 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#8B5CF6',
     marginTop: 5,
-  },
-  productImagePlaceholder: {
-    width: 60,
-    height: 60,
-    backgroundColor: '#f0f0f0',
-    borderRadius: 8,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginBottom: 10,
-  },
-  productImageText: {
-    fontSize: 24,
   },
   clearSearchButton2: {
     backgroundColor: '#8B5CF6',
