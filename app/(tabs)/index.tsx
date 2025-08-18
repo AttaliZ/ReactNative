@@ -10,10 +10,10 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
-  View
+  View,
 } from 'react-native';
 
-// Types (unchanged from original)
+// Types
 interface Product {
   id: string;
   name: string;
@@ -37,10 +37,13 @@ interface User {
   role: string;
 }
 
-const API_BASE_URL = 'http://localhost:3008/api';
+// API URL to use cloud server
+const API_BASE_URL = 'http://nindam.sytes.net:3008/api';
 
 const InventoryApp = () => {
-  const [currentScreen, setCurrentScreen] = useState<'login' | 'register' | 'dashboard' | 'products' | 'product-detail' | 'categories'>('login');
+  const [currentScreen, setCurrentScreen] = useState<
+    'login' | 'register' | 'dashboard' | 'products' | 'product-detail' | 'categories'
+  >('login');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [email, setEmail] = useState('');
@@ -53,47 +56,138 @@ const InventoryApp = () => {
   const [user, setUser] = useState<User | null>(null);
   const [authToken, setAuthToken] = useState<string | null>(null);
 
-  // API Functions (unchanged)
+  // Enhanced API Call Function with better error handling for cloud
   const apiCall = async (endpoint: string, options: any = {}) => {
     const config = {
       ...options,
       headers: {
         'Content-Type': 'application/json',
+        'Accept': 'application/json',
         ...(authToken && { Authorization: `Bearer ${authToken}` }),
         ...options.headers,
       },
     };
 
-    const response = await fetch(`${API_BASE_URL}${endpoint}`, config);
-    const data = await response.json();
-
-    if (!response.ok) {
-      throw new Error(data.error || 'Something went wrong');
+    try {
+      console.log(`Making API call to: ${API_BASE_URL}${endpoint}`);
+      
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 15000); // 15 second timeout for cloud
+      
+      const response = await fetch(`${API_BASE_URL}${endpoint}`, {
+        ...config,
+        signal: controller.signal,
+      });
+      
+      clearTimeout(timeoutId);
+      
+      console.log(`API Response Status: ${response.status}`);
+      
+      if (!response.ok) {
+        let errorMessage = `HTTP error ${response.status}`;
+        try {
+          const errorData = await response.json();
+          errorMessage = errorData.error || errorMessage;
+        } catch (parseError) {
+          // If can't parse error response, use status text
+          errorMessage = response.statusText || errorMessage;
+        }
+        throw new Error(errorMessage);
+      }
+      
+      const data = await response.json();
+      console.log('API call successful');
+      return data;
+      
+    } catch (err: any) {
+      console.error('API call failed:', {
+        endpoint,
+        error: err.message,
+        name: err.name,
+      });
+      
+      if (err.name === 'AbortError') {
+        throw new Error('Request timed out. Please check your internet connection.');
+      }
+      
+      if (err.name === 'TypeError' && err.message.includes('fetch')) {
+        throw new Error('Cannot connect to server. Please check your internet connection.');
+      }
+      
+      // Handle specific HTTP errors
+      if (err.message.includes('401')) {
+        throw new Error('Authentication failed. Please login again.');
+      }
+      
+      if (err.message.includes('403')) {
+        throw new Error('Access denied. Please login again.');
+      }
+      
+      if (err.message.includes('404')) {
+        throw new Error('Service not found. Please try again later.');
+      }
+      
+      if (err.message.includes('500')) {
+        throw new Error('Server error. Please try again later.');
+      }
+      
+      throw new Error(err.message || 'Network error occurred');
     }
-
-    return data;
   };
 
-  // Authentication Functions (unchanged)
+  // Test API connection
+  const testConnection = async () => {
+    try {
+      const response = await apiCall('/ping');
+      console.log('API Connection Test:', response);
+      return true;
+    } catch (error) {
+      console.error('API Connection Test Failed:', error);
+      return false;
+    }
+  };
+
+  // Authentication Functions
   const handleLogin = async () => {
     try {
       setLoading(true);
       setError(null);
 
+      if (!username.trim() || !password.trim()) {
+        throw new Error('Username and password are required');
+      }
+
+      // Test connection first
+      const isConnected = await testConnection();
+      if (!isConnected) {
+        throw new Error('Cannot connect to server. Please check your internet connection.');
+      }
+
       const response = await apiCall('/auth/login', {
         method: 'POST',
-        body: JSON.stringify({ username, password }),
+        body: JSON.stringify({ 
+          username: username.trim(), 
+          password: password.trim() 
+        }),
       });
 
-      if (response.success) {
+      if (response.token && response.user) {
         setAuthToken(response.token);
         setUser(response.user);
         setCurrentScreen('dashboard');
         Alert.alert('Success', 'Login successful!');
+        
+        // Clear form
+        setPassword('');
+        setError(null);
+        
+      } else {
+        throw new Error('Invalid response from server');
       }
     } catch (err: any) {
+      console.error('Login error:', err);
       setError(err.message);
-      Alert.alert('Error', err.message);
+      Alert.alert('Login Error', err.message);
     } finally {
       setLoading(false);
     }
@@ -104,23 +198,42 @@ const InventoryApp = () => {
       setLoading(true);
       setError(null);
 
-      if (!username || !password) {
+      if (!username.trim() || !password.trim()) {
         throw new Error('Username and password are required');
+      }
+
+      if (password.length < 6) {
+        throw new Error('Password must be at least 6 characters');
+      }
+
+      // Test connection first
+      const isConnected = await testConnection();
+      if (!isConnected) {
+        throw new Error('Cannot connect to server. Please check your internet connection.');
       }
 
       const response = await apiCall('/auth/register', {
         method: 'POST',
-        body: JSON.stringify({ username, password, email }),
+        body: JSON.stringify({ 
+          username: username.trim(), 
+          password: password.trim(), 
+          email: email.trim() || null 
+        }),
       });
 
       if (response.success) {
         Alert.alert('Success', 'Registration successful! Please login.');
         setCurrentScreen('login');
         setEmail('');
+        setPassword('');
+        setError(null);
+      } else {
+        throw new Error('Registration failed');
       }
     } catch (err: any) {
+      console.error('Registration error:', err);
       setError(err.message);
-      Alert.alert('Error', err.message);
+      Alert.alert('Registration Error', err.message);
     } finally {
       setLoading(false);
     }
@@ -135,21 +248,50 @@ const InventoryApp = () => {
     setEmail('');
     setCurrentScreen('login');
     setShowSideMenu(false);
-    setSelectedProduct(null); // Clear selected product on logout
+    setSelectedProduct(null);
+    setError(null);
+    setSearchQuery('');
   };
 
-  // Fetch products from backend
+  // Fetch Products with enhanced error handling
   const fetchProducts = async () => {
-    if (!authToken) return;
+    if (!authToken) {
+      setError('Please log in to view products');
+      Alert.alert('Error', 'Please log in to view products');
+      return;
+    }
 
     try {
       setLoading(true);
       setError(null);
+      
       const data = await apiCall('/products');
-      setProducts(data);
+      
+      if (!Array.isArray(data)) {
+        throw new Error('Invalid data format received');
+      }
+      
+      const parsedData = data.map((product: any) => ({
+        ...product,
+        storeAvailability: typeof product.storeAvailability === 'string'
+          ? JSON.parse(product.storeAvailability || '[]')
+          : product.storeAvailability || [],
+      }));
+      
+      setProducts(parsedData);
+      console.log(`Loaded ${parsedData.length} products`);
+      
     } catch (err: any) {
+      console.error('Fetch products error:', err);
       setError(err.message);
-      Alert.alert('Error', 'Failed to load products: ' + err.message);
+      
+      if (err.message.includes('Authentication') || err.message.includes('login')) {
+        Alert.alert('Session Expired', 'Please login again.', [
+          { text: 'OK', onPress: handleLogout }
+        ]);
+      } else {
+        Alert.alert('Error', `Failed to load products: ${err.message}`);
+      }
     } finally {
       setLoading(false);
     }
@@ -161,7 +303,14 @@ const InventoryApp = () => {
     }
   }, [authToken, currentScreen]);
 
-  // Side Menu Component (unchanged)
+  // Auto-fetch products when accessing dashboard
+  useEffect(() => {
+    if (authToken && currentScreen === 'dashboard' && products.length === 0) {
+      fetchProducts();
+    }
+  }, [authToken, currentScreen]);
+
+  // Side Menu Component
   const SideMenu = () => {
     if (!showSideMenu) return null;
 
@@ -185,13 +334,13 @@ const InventoryApp = () => {
             )}
 
             <View style={styles.sideMenuItems}>
-              <TouchableOpacity style={styles.sideMenuItem} onPress={() => { setCurrentScreen('dashboard'); setShowSideMenu(false); }}>
+              <TouchableOpacity style={styles.sideMenuItem} onPress={() => { setCurrentScreen('dashboard'); setShowSideMenu(false); setSearchQuery(''); }}>
                 <Text style={styles.sideMenuItemText}>Home</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={styles.sideMenuItem} onPress={() => { setCurrentScreen('products'); setShowSideMenu(false); }}>
+              <TouchableOpacity style={styles.sideMenuItem} onPress={() => { setCurrentScreen('products'); setShowSideMenu(false); setSearchQuery(''); }}>
                 <Text style={styles.sideMenuItemText}>Products</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={styles.sideMenuItem} onPress={() => { setCurrentScreen('categories'); setShowSideMenu(false); }}>
+              <TouchableOpacity style={styles.sideMenuItem} onPress={() => { setCurrentScreen('categories'); setShowSideMenu(false); setSearchQuery(''); }}>
                 <Text style={styles.sideMenuItemText}>Categories</Text>
               </TouchableOpacity>
               <TouchableOpacity style={styles.sideMenuItem}>
@@ -214,7 +363,7 @@ const InventoryApp = () => {
     );
   };
 
-  // Register Screen Component (unchanged)
+  // Register Screen Component
   const RegisterScreen = () => {
     return (
       <SafeAreaView style={styles.container}>
@@ -233,6 +382,7 @@ const InventoryApp = () => {
                 placeholder="Enter your username"
                 placeholderTextColor="#ccc"
                 autoCapitalize="none"
+                autoCorrect={false}
               />
             </View>
 
@@ -246,6 +396,7 @@ const InventoryApp = () => {
                 placeholderTextColor="#ccc"
                 keyboardType="email-address"
                 autoCapitalize="none"
+                autoCorrect={false}
               />
             </View>
 
@@ -255,35 +406,31 @@ const InventoryApp = () => {
                 style={styles.input}
                 value={password}
                 onChangeText={setPassword}
-                placeholder="Enter your password"
+                placeholder="Enter your password (min 6 characters)"
                 placeholderTextColor="#ccc"
                 secureTextEntry
               />
             </View>
 
-            {error && (
-              <View style={styles.errorContainer}>
-                <Text style={styles.errorText}>{error}</Text>
-              </View>
-            )}
+            {loading && <Text style={styles.loadingText}>Creating Account...</Text>}
+            {error && <Text style={styles.errorText}>{error}</Text>}
 
             <TouchableOpacity 
               style={[styles.loginButton, loading && styles.disabledButton]} 
               onPress={handleRegister}
               disabled={loading}
             >
-              <Text style={styles.loginButtonText}>
-                {loading ? 'Creating Account...' : 'Sign Up'}
-              </Text>
+              <Text style={styles.loginButtonText}>Sign Up</Text>
             </TouchableOpacity>
 
             <TouchableOpacity 
               style={styles.switchScreenButton} 
-              onPress={() => setCurrentScreen('login')}
+              onPress={() => {
+                setCurrentScreen('login');
+                setError(null);
+              }}
             >
-              <Text style={styles.switchScreenText}>
-                Already have an account? Log in
-              </Text>
+              <Text style={styles.switchScreenText}>Already have an account? Log in</Text>
             </TouchableOpacity>
           </View>
         </LinearGradient>
@@ -291,7 +438,7 @@ const InventoryApp = () => {
     );
   };
 
-  // Login Screen Component (unchanged)
+  // Login Screen Component
   const LoginScreen = () => {
     return (
       <SafeAreaView style={styles.container}>
@@ -310,6 +457,7 @@ const InventoryApp = () => {
                 placeholder="Enter your username"
                 placeholderTextColor="#ccc"
                 autoCapitalize="none"
+                autoCorrect={false}
               />
             </View>
 
@@ -325,29 +473,25 @@ const InventoryApp = () => {
               />
             </View>
 
-            {error && (
-              <View style={styles.errorContainer}>
-                <Text style={styles.errorText}>{error}</Text>
-              </View>
-            )}
+            {loading && <Text style={styles.loadingText}>Logging in...</Text>}
+            {error && <Text style={styles.errorText}>{error}</Text>}
 
             <TouchableOpacity 
               style={[styles.loginButton, loading && styles.disabledButton]} 
               onPress={handleLogin}
               disabled={loading}
             >
-              <Text style={styles.loginButtonText}>
-                {loading ? 'Logging in...' : 'Log in'}
-              </Text>
+              <Text style={styles.loginButtonText}>Log in</Text>
             </TouchableOpacity>
 
             <TouchableOpacity 
               style={styles.switchScreenButton} 
-              onPress={() => setCurrentScreen('register')}
+              onPress={() => {
+                setCurrentScreen('register');
+                setError(null);
+              }}
             >
-              <Text style={styles.switchScreenText}>
-                Don't have an account? Sign up
-              </Text>
+              <Text style={styles.switchScreenText}>Don't have an account? Sign up</Text>
             </TouchableOpacity>
           </View>
         </LinearGradient>
@@ -355,7 +499,7 @@ const InventoryApp = () => {
     );
   };
 
-  // Product Detail Screen Component (fixed)
+  // Product Detail Screen Component
   const ProductDetailScreen = () => {
     if (!selectedProduct) return null;
 
@@ -367,7 +511,8 @@ const InventoryApp = () => {
             style={styles.menuButton} 
             onPress={() => {
               setCurrentScreen('products');
-              setSelectedProduct(null); // Clear selected product
+              setSelectedProduct(null);
+              setSearchQuery('');
             }}
           >
             <Text style={styles.menuIcon}>←</Text>
@@ -380,7 +525,11 @@ const InventoryApp = () => {
 
         <ScrollView style={styles.productDetailContainer}>
           <View style={styles.productDetailImageContainer}>
-            <Image source={{ uri: selectedProduct.image }} style={styles.productDetailImage} />
+            <Image 
+              source={{ uri: selectedProduct.image || 'https://via.placeholder.com/200' }} 
+              style={styles.productDetailImage}
+              onError={() => console.log(`Failed to load image for ${selectedProduct.name}`)}
+            />
           </View>
           <Text style={styles.productDetailName}>{selectedProduct.name}</Text>
           <Text style={styles.productDetailBrand}>{selectedProduct.brand}</Text>
@@ -400,14 +549,18 @@ const InventoryApp = () => {
               </View>
             </View>
             <Text style={styles.storeAvailabilityTitle}>Store availability:</Text>
-            {selectedProduct.storeAvailability.map((store, index) => (
-              <View key={index} style={styles.storeAvailabilityItem}>
-                <Text style={styles.storeLocation}>{store.location}</Text>
-                <Text style={[styles.storeStatus, { color: store.available ? '#22c55e' : '#ef4444' }]}>
-                  {store.available ? '✓' : '✕'}
-                </Text>
-              </View>
-            ))}
+            {selectedProduct.storeAvailability && selectedProduct.storeAvailability.length > 0 ? (
+              selectedProduct.storeAvailability.map((store, index) => (
+                <View key={index} style={styles.storeAvailabilityItem}>
+                  <Text style={styles.storeLocation}>{store.location}</Text>
+                  <Text style={[styles.storeStatus, { color: store.available ? '#22c55e' : '#ef4444' }]}>
+                    {store.available ? '✓' : '✕'}
+                  </Text>
+                </View>
+              ))
+            ) : (
+              <Text style={styles.productDetailLabel}>No store availability data</Text>
+            )}
             <Text style={styles.lastUpdate}>Last update {selectedProduct.lastUpdate}</Text>
           </View>
         </ScrollView>
@@ -421,7 +574,7 @@ const InventoryApp = () => {
             <Text style={styles.navIcon}>➕</Text>
             <Text style={styles.navText}>Add</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.navItem} onPress={() => { setCurrentScreen('products'); setSelectedProduct(null); }}>
+          <TouchableOpacity style={styles.navItem} onPress={() => { setSearchQuery(''); setCurrentScreen('products'); setSelectedProduct(null); }}>
             <Text style={styles.navIcon}>📦</Text>
             <Text style={[styles.navText, { color: '#8B5CF6' }]}>Products</Text>
           </TouchableOpacity>
@@ -434,9 +587,8 @@ const InventoryApp = () => {
     );
   };
 
-  // Categories Screen Component (completed)
+  // Categories Screen Component
   const CategoriesScreen = () => {
-    // Create categories from products
     const categories = Array.from(new Set(products.map(p => p.category)))
       .map(category => ({
         id: category,
@@ -565,7 +717,7 @@ const InventoryApp = () => {
           </TouchableOpacity>
           <TouchableOpacity style={styles.navItem} onPress={() => { setSearchQuery(''); setCurrentScreen('products'); }}>
             <Text style={styles.navIcon}>📦</Text>
-            <Text style={styles.navText}>Products</Text>
+            <Text style={[styles.navText, { color: '#8B5CF6' }]}>Products</Text>
           </TouchableOpacity>
           <TouchableOpacity style={styles.navItem} onPress={() => { setSearchQuery(''); setCurrentScreen('categories'); }}>
             <Text style={styles.navIcon}>📁</Text>
@@ -576,7 +728,7 @@ const InventoryApp = () => {
     );
   };
 
-  // Dashboard Screen Component (unchanged except for Add button)
+  // Dashboard Screen Component
   const DashboardScreen = () => {
     const activityData = [
       { label: 'TOTAL PRODUCTS', value: products.length, color: '#8B5CF6' },
@@ -606,6 +758,13 @@ const InventoryApp = () => {
         </View>
 
         <ScrollView style={styles.dashboardContent}>
+          {/* Connection Status Indicator */}
+          <View style={styles.connectionStatus}>
+            <Text style={[styles.connectionText, { color: authToken ? '#22c55e' : '#ef4444' }]}>
+              {authToken ? '🟢 Connected to Cloud' : '🔴 Not Connected'}
+            </Text>
+          </View>
+
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>Inventory Overview</Text>
             <View style={styles.activityGrid}>
@@ -735,7 +894,7 @@ const InventoryApp = () => {
     );
   };
 
-  // Products Screen Component (unchanged except for Add button)
+  // Products Screen Component
   const ProductsScreen = () => {
     const filteredProducts = products.filter((product) =>
       product.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -826,7 +985,11 @@ const InventoryApp = () => {
             ) : (
               filteredProducts.map((product) => (
                 <View key={product.id} style={styles.productCard}>
-                  <Image source={{ uri: product.image }} style={styles.productImage} />
+                  <Image 
+                    source={{ uri: product.image || 'https://via.placeholder.com/60' }} 
+                    style={styles.productImage}
+                    onError={() => console.log(`Failed to load image for ${product.name}`)}
+                  />
                   <View style={styles.productInfo}>
                     <View style={styles.productDetails}>
                       <Text style={styles.stockText}>Stock: {product.stock} in stock</Text>
@@ -875,7 +1038,7 @@ const InventoryApp = () => {
     );
   };
 
-  // Main render
+  // Main Render
   return (
     <>
       {currentScreen === 'login' && <LoginScreen />}
@@ -889,7 +1052,7 @@ const InventoryApp = () => {
   );
 };
 
-// Styles (unchanged)
+// Enhanced Styles with cloud connection indicator
 const styles = StyleSheet.create({
   container: {
     flex: 1,
@@ -961,18 +1124,20 @@ const styles = StyleSheet.create({
     fontSize: 16,
     textDecorationLine: 'underline',
   },
-  errorContainer: {
-    backgroundColor: 'rgba(239, 68, 68, 0.1)',
-    borderRadius: 8,
-    padding: 12,
-    marginTop: 10,
-    borderWidth: 1,
-    borderColor: 'rgba(239, 68, 68, 0.3)',
+  loadingText: {
+    color: 'rgba(255, 255, 255, 0.9)',
+    textAlign: 'center',
+    fontSize: 16,
+    marginVertical: 10,
   },
   errorText: {
-    color: '#ef4444',
+    color: '#ff6b6b',
     fontSize: 14,
     textAlign: 'center',
+    backgroundColor: 'rgba(255, 107, 107, 0.1)',
+    padding: 10,
+    borderRadius: 8,
+    marginVertical: 10,
   },
   userInfo: {
     backgroundColor: 'rgba(255, 255, 255, 0.1)',
@@ -989,6 +1154,22 @@ const styles = StyleSheet.create({
     color: 'rgba(255, 255, 255, 0.8)',
     fontSize: 14,
     textTransform: 'capitalize',
+  },
+  connectionStatus: {
+    backgroundColor: 'white',
+    borderRadius: 8,
+    padding: 12,
+    marginBottom: 20,
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.1,
+    shadowRadius: 2,
+    elevation: 2,
+  },
+  connectionText: {
+    fontSize: 14,
+    fontWeight: '500',
   },
   header: {
     flexDirection: 'row',
@@ -1462,12 +1643,6 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.1,
     shadowRadius: 4,
     elevation: 3,
-  },
-  productDetailCardTitle: {
-    fontSize: 16,
-    color: '#8B5CF6',
-    marginBottom: 15,
-    fontWeight: '500',
   },
   productDetailInfo: {
     marginBottom: 20,
