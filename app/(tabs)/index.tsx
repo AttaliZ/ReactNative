@@ -1,8 +1,11 @@
 import { LinearGradient } from 'expo-linear-gradient';
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
+  ActivityIndicator,
   Alert,
   Image,
+  KeyboardAvoidingView,
+  Platform,
   SafeAreaView,
   ScrollView,
   StatusBar,
@@ -17,15 +20,17 @@ import {
 interface Product {
   id: string;
   name: string;
+  description: string | null;
+  price: number;
   stock: number;
-  category: string;
-  location: string;
-  image: string;
+  category: string | null;
+  location: string | null;
+  image: string | null;
   status: 'Active' | 'Inactive';
-  brand: string;
-  sizes: string;
-  productCode: string;
-  orderName: string;
+  brand: string | null;
+  sizes: string | null;
+  productCode: string | null;
+  orderName: string | null;
   storeAvailability: { location: string; available: boolean }[];
   lastUpdate: string;
 }
@@ -37,42 +42,108 @@ interface User {
   role: string;
 }
 
-// API URL to use cloud server
+interface FormData {
+  name: string;
+  description: string;
+  price: string;
+  stock: string;
+  category: string;
+  location: string;
+  image: string;
+  status: 'Active' | 'Inactive';
+  brand: string;
+  sizes: string;
+  productCode: string;
+  orderName: string;
+  storeAvailability: { location: string; available: boolean }[];
+}
+
+// Constants
 const API_BASE_URL = 'http://nindam.sytes.net:3008/api';
+const EMPTY_FORM: FormData = {
+  name: '',
+  description: '',
+  price: '',
+  stock: '',
+  category: '',
+  location: '',
+  image: '',
+  status: 'Active',
+  brand: '',
+  sizes: '',
+  productCode: '',
+  orderName: '',
+  storeAvailability: [],
+};
 
 const InventoryApp = () => {
+  // State Management
   const [currentScreen, setCurrentScreen] = useState<
-    'login' | 'register' | 'dashboard' | 'products' | 'product-detail' | 'categories'
+    'login' | 'register' | 'dashboard' | 'products' | 'product-detail' | 'categories' | 'add-product' | 'edit-product'
   >('login');
+  
+  // User & Auth States
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [email, setEmail] = useState('');
+  const [user, setUser] = useState<User | null>(null);
+  const [authToken, setAuthToken] = useState<string | null>(null);
+  
+  // Product States
   const [products, setProducts] = useState<Product[]>([]);
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
+  const [formData, setFormData] = useState<FormData>(EMPTY_FORM);
+  
+  // UI States
   const [showSideMenu, setShowSideMenu] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [user, setUser] = useState<User | null>(null);
-  const [authToken, setAuthToken] = useState<string | null>(null);
+  
+  // Refs for TextInput focus management
+  const formRefs = useRef<{ [key: string]: TextInput | null }>({});
 
-  // Enhanced API Call Function with better error handling for cloud
-  const apiCall = async (endpoint: string, options: any = {}) => {
+  // Helper Functions
+  const resetForm = useCallback(() => {
+    setFormData(EMPTY_FORM);
+    setError(null);
+    // Don't clear refs when resetting form
+  }, []);
+
+  const showAlert = useCallback((title: string, message: string, onPress?: () => void) => {
+    Alert.alert(title, message, onPress ? [{ text: 'OK', onPress }] : undefined);
+  }, []);
+
+  const validateForm = useCallback((data: FormData, isEdit = false): string | null => {
+    if (!data.name || !data.name.trim()) return 'Name is required';
+    if (!data.price || !data.price.trim()) return 'Price is required';
+    
+    const price = parseFloat(data.price);
+    if (isNaN(price) || price <= 0) return 'Price must be a valid positive number';
+    
+    if (data.stock && data.stock.trim()) {
+      const stock = parseInt(data.stock, 10);
+      if (isNaN(stock) || stock < 0) return 'Stock must be a valid non-negative number';
+    }
+    
+    return null;
+  }, []);
+
+  // API Functions
+  const apiCall = useCallback(async (endpoint: string, options: any = {}) => {
     const config = {
       ...options,
       headers: {
         'Content-Type': 'application/json',
-        'Accept': 'application/json',
+        Accept: 'application/json',
         ...(authToken && { Authorization: `Bearer ${authToken}` }),
         ...options.headers,
       },
     };
 
     try {
-      console.log(`Making API call to: ${API_BASE_URL}${endpoint}`);
-      
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 15000); // 15 second timeout for cloud
+      const timeoutId = setTimeout(() => controller.abort(), 15000);
       
       const response = await fetch(`${API_BASE_URL}${endpoint}`, {
         ...config,
@@ -80,88 +151,53 @@ const InventoryApp = () => {
       });
       
       clearTimeout(timeoutId);
-      
-      console.log(`API Response Status: ${response.status}`);
-      
+
       if (!response.ok) {
         let errorMessage = `HTTP error ${response.status}`;
         try {
           const errorData = await response.json();
           errorMessage = errorData.error || errorMessage;
-        } catch (parseError) {
-          // If can't parse error response, use status text
+        } catch {
           errorMessage = response.statusText || errorMessage;
         }
         throw new Error(errorMessage);
       }
-      
-      const data = await response.json();
-      console.log('API call successful');
-      return data;
-      
+
+      return await response.json();
     } catch (err: any) {
-      console.error('API call failed:', {
-        endpoint,
-        error: err.message,
-        name: err.name,
-      });
-      
       if (err.name === 'AbortError') {
         throw new Error('Request timed out. Please check your internet connection.');
       }
-      
-      if (err.name === 'TypeError' && err.message.includes('fetch')) {
-        throw new Error('Cannot connect to server. Please check your internet connection.');
-      }
-      
-      // Handle specific HTTP errors
       if (err.message.includes('401')) {
         throw new Error('Authentication failed. Please login again.');
       }
-      
-      if (err.message.includes('403')) {
-        throw new Error('Access denied. Please login again.');
-      }
-      
-      if (err.message.includes('404')) {
-        throw new Error('Service not found. Please try again later.');
-      }
-      
-      if (err.message.includes('500')) {
-        throw new Error('Server error. Please try again later.');
-      }
-      
       throw new Error(err.message || 'Network error occurred');
     }
-  };
+  }, [authToken]);
 
-  // Test API connection
-  const testConnection = async () => {
+  const testConnection = useCallback(async () => {
     try {
-      const response = await apiCall('/ping');
-      console.log('API Connection Test:', response);
+      await apiCall('/ping');
       return true;
-    } catch (error) {
-      console.error('API Connection Test Failed:', error);
+    } catch {
       return false;
     }
-  };
+  }, [apiCall]);
 
   // Authentication Functions
-  const handleLogin = async () => {
+  const handleLogin = useCallback(async () => {
+    if (loading) return; // Prevent multiple calls
+    
     try {
       setLoading(true);
       setError(null);
 
-      if (!username.trim() || !password.trim()) {
-        throw new Error('Username and password are required');
-      }
+      const validationError = !username.trim() ? 'Username is required' : 
+                             !password.trim() ? 'Password is required' : null;
+      if (validationError) throw new Error(validationError);
 
-      // Test connection first
       const isConnected = await testConnection();
-      if (!isConnected) {
-        throw new Error('Cannot connect to server. Please check your internet connection.');
-      }
+      if (!isConnected) throw new Error('Cannot connect to server.');
 
       const response = await apiCall('/auth/login', {
         method: 'POST',
@@ -175,42 +211,34 @@ const InventoryApp = () => {
         setAuthToken(response.token);
         setUser(response.user);
         setCurrentScreen('dashboard');
-        Alert.alert('Success', 'Login successful!');
-        
-        // Clear form
         setPassword('');
         setError(null);
-        
+        showAlert('Success', 'Login successful!');
       } else {
         throw new Error('Invalid response from server');
       }
     } catch (err: any) {
-      console.error('Login error:', err);
       setError(err.message);
-      Alert.alert('Login Error', err.message);
+      showAlert('Login Error', err.message);
     } finally {
       setLoading(false);
     }
-  };
+  }, [username, password, loading, apiCall, testConnection, showAlert]);
 
-  const handleRegister = async () => {
+  const handleRegister = useCallback(async () => {
+    if (loading) return; // Prevent multiple calls
+    
     try {
       setLoading(true);
       setError(null);
 
-      if (!username.trim() || !password.trim()) {
-        throw new Error('Username and password are required');
-      }
+      const validationError = !username.trim() ? 'Username is required' : 
+                             !password.trim() ? 'Password is required' :
+                             password.length < 6 ? 'Password must be at least 6 characters' : null;
+      if (validationError) throw new Error(validationError);
 
-      if (password.length < 6) {
-        throw new Error('Password must be at least 6 characters');
-      }
-
-      // Test connection first
       const isConnected = await testConnection();
-      if (!isConnected) {
-        throw new Error('Cannot connect to server. Please check your internet connection.');
-      }
+      if (!isConnected) throw new Error('Cannot connect to server.');
 
       const response = await apiCall('/auth/register', {
         method: 'POST',
@@ -222,7 +250,7 @@ const InventoryApp = () => {
       });
 
       if (response.success) {
-        Alert.alert('Success', 'Registration successful! Please login.');
+        showAlert('Success', 'Registration successful! Please login.');
         setCurrentScreen('login');
         setEmail('');
         setPassword('');
@@ -231,15 +259,14 @@ const InventoryApp = () => {
         throw new Error('Registration failed');
       }
     } catch (err: any) {
-      console.error('Registration error:', err);
       setError(err.message);
-      Alert.alert('Registration Error', err.message);
+      showAlert('Registration Error', err.message);
     } finally {
       setLoading(false);
     }
-  };
+  }, [username, password, email, loading, apiCall, testConnection, showAlert]);
 
-  const handleLogout = () => {
+  const handleLogout = useCallback(() => {
     setAuthToken(null);
     setUser(null);
     setProducts([]);
@@ -251,76 +278,404 @@ const InventoryApp = () => {
     setSelectedProduct(null);
     setError(null);
     setSearchQuery('');
-  };
+    resetForm();
+  }, [resetForm]);
 
-  // Fetch Products with enhanced error handling
-  const fetchProducts = async () => {
+  // Product CRUD Operations
+  const fetchProducts = useCallback(async () => {
     if (!authToken) {
       setError('Please log in to view products');
-      Alert.alert('Error', 'Please log in to view products');
+      showAlert('Error', 'Please log in to view products');
       return;
     }
 
     try {
       setLoading(true);
       setError(null);
-      
+
       const data = await apiCall('/products');
-      
+
       if (!Array.isArray(data)) {
         throw new Error('Invalid data format received');
       }
-      
+
       const parsedData = data.map((product: any) => ({
         ...product,
+        price: product.price ? Number(product.price) : 0,
+        stock: product.stock ? Number(product.stock) : 0,
+        name: product.name || 'Unnamed Product',
         storeAvailability: typeof product.storeAvailability === 'string'
           ? JSON.parse(product.storeAvailability || '[]')
           : product.storeAvailability || [],
       }));
-      
+
       setProducts(parsedData);
-      console.log(`Loaded ${parsedData.length} products`);
-      
     } catch (err: any) {
-      console.error('Fetch products error:', err);
-      setError(err.message);
+      const errorMessage = err.message || 'Failed to load products';
+      setError(errorMessage);
       
-      if (err.message.includes('Authentication') || err.message.includes('login')) {
-        Alert.alert('Session Expired', 'Please login again.', [
-          { text: 'OK', onPress: handleLogout }
-        ]);
+      if (errorMessage.includes('Authentication') || errorMessage.includes('login')) {
+        showAlert('Session Expired', 'Please login again.', handleLogout);
       } else {
-        Alert.alert('Error', `Failed to load products: ${err.message}`);
+        showAlert('Error', `Failed to load products: ${errorMessage}`);
       }
     } finally {
       setLoading(false);
     }
-  };
+  }, [authToken, apiCall, showAlert, handleLogout]);
 
+  const handleAddProduct = useCallback(async () => {
+    try {
+      setLoading(true);
+      setError(null);
+
+      const validationError = validateForm(formData);
+      if (validationError) throw new Error(validationError);
+
+      const payload = {
+        name: formData.name.trim(),
+        description: formData.description.trim() || null,
+        price: parseFloat(formData.price),
+        stock: parseInt(formData.stock, 10) || 0,
+        category: formData.category.trim() || null,
+        location: formData.location.trim() || null,
+        image: formData.image.trim() || null,
+        status: formData.status,
+        brand: formData.brand.trim() || null,
+        sizes: formData.sizes.trim() || null,
+        productCode: formData.productCode.trim() || null,
+        orderName: formData.orderName.trim() || null,
+        storeAvailability: formData.storeAvailability || [],
+      };
+
+      const response = await apiCall('/products', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      });
+
+      if (response.success || response.product_id || response.id) {
+        showAlert('Success', 'Product added successfully!');
+        resetForm();
+        setCurrentScreen('products');
+        await fetchProducts();
+      } else {
+        throw new Error('Unexpected response from server');
+      }
+    } catch (err: any) {
+      const errorMessage = err.message || 'Failed to create product';
+      setError(errorMessage);
+      showAlert('Error', errorMessage);
+    } finally {
+      setLoading(false);
+    }
+  }, [formData, validateForm, apiCall, showAlert, resetForm, fetchProducts]);
+
+  const handleUpdateProduct = useCallback(async () => {
+    if (!selectedProduct) return;
+
+    try {
+      setLoading(true);
+      setError(null);
+
+      const validationError = validateForm(formData, true);
+      if (validationError) throw new Error(validationError);
+
+      // Clean the payload to match server expectations
+      const payload = {
+        name: formData.name.trim(),
+        description: formData.description.trim() || null,
+        price: parseFloat(formData.price),
+        stock: parseInt(formData.stock || '0', 10),
+        category: formData.category.trim() || null,
+        location: formData.location.trim() || null,
+        image: formData.image.trim() || null,
+        status: formData.status,
+        brand: formData.brand.trim() || null,
+        sizes: formData.sizes.trim() || null,
+        productCode: formData.productCode.trim() || null,
+        orderName: formData.orderName.trim() || null,
+        // Only include storeAvailability if it has data
+        ...(formData.storeAvailability && formData.storeAvailability.length > 0 && {
+          storeAvailability: formData.storeAvailability
+        })
+      };
+
+      console.log('Update payload:', JSON.stringify(payload, null, 2));
+
+      const response = await apiCall(`/products/${selectedProduct.id}`, {
+        method: 'PUT',
+        body: JSON.stringify(payload),
+      });
+
+      if (response.success !== false) {
+        showAlert('Success', 'Product updated successfully!');
+        resetForm();
+        setCurrentScreen('products');
+        setSelectedProduct(null);
+        await fetchProducts();
+      } else {
+        throw new Error(response.message || 'Unexpected response from server');
+      }
+    } catch (err: any) {
+      console.error('Update product error:', err);
+      const errorMessage = err.message || 'Failed to update product';
+      setError(errorMessage);
+      showAlert('Error', errorMessage);
+    } finally {
+      setLoading(false);
+    }
+  }, [selectedProduct, formData, validateForm, apiCall, showAlert, resetForm, fetchProducts]);
+
+  const handleDeleteProduct = useCallback(async (productId: string) => {
+    Alert.alert(
+      'Confirm Delete',
+      'Are you sure you want to delete this product?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              setLoading(true);
+              setError(null);
+
+              const response = await apiCall(`/products/${productId}`, {
+                method: 'DELETE',
+              });
+
+              if (response.success || response.message) {
+                showAlert('Success', 'Product deleted successfully!');
+                setCurrentScreen('products');
+                setSelectedProduct(null);
+                await fetchProducts();
+              } else {
+                throw new Error('Failed to delete product');
+              }
+            } catch (err: any) {
+              const errorMessage = err.message || 'Failed to delete product';
+              setError(errorMessage);
+              showAlert('Error', errorMessage);
+            } finally {
+              setLoading(false);
+            }
+          },
+        },
+      ]
+    );
+  }, [apiCall, showAlert, fetchProducts]);
+
+  // Navigation Functions
+  const navigateToScreen = useCallback((screen: string, product?: Product) => {
+    setError(null);
+    setSearchQuery('');
+    if (product) setSelectedProduct(product);
+    setCurrentScreen(screen as any);
+    setShowSideMenu(false);
+  }, []);
+
+  const handleEditProduct = useCallback(() => {
+    if (!selectedProduct) return;
+    
+    setFormData({
+      name: selectedProduct.name,
+      description: selectedProduct.description || '',
+      price: selectedProduct.price?.toString() || '',
+      stock: selectedProduct.stock?.toString() || '',
+      category: selectedProduct.category || '',
+      location: selectedProduct.location || '',
+      image: selectedProduct.image || '',
+      status: selectedProduct.status,
+      brand: selectedProduct.brand || '',
+      sizes: selectedProduct.sizes || '',
+      productCode: selectedProduct.productCode || '',
+      orderName: selectedProduct.orderName || '',
+      storeAvailability: selectedProduct.storeAvailability || [],
+    });
+    setCurrentScreen('edit-product');
+  }, [selectedProduct]);
+
+  // Focus Management
+  const focusField = useCallback((fieldName: string) => {
+    if (!fieldName) return;
+    
+    const ref = formRefs.current[fieldName];
+    if (ref) {
+      setTimeout(() => {
+        try {
+          ref.focus();
+        } catch (error) {
+          console.log('Focus error:', error);
+        }
+      }, 100);
+    }
+  }, []);
+
+  // Effects
   useEffect(() => {
-    if (authToken && currentScreen === 'products') {
+    if (authToken && (currentScreen === 'products' || currentScreen === 'dashboard')) {
       fetchProducts();
     }
-  }, [authToken, currentScreen]);
+  }, [authToken, currentScreen, fetchProducts]);
 
-  // Auto-fetch products when accessing dashboard
+  // Only clear error when screen changes
   useEffect(() => {
-    if (authToken && currentScreen === 'dashboard' && products.length === 0) {
-      fetchProducts();
-    }
-  }, [authToken, currentScreen]);
+    setError(null);
+  }, [currentScreen]);
 
-  // Side Menu Component
+  // UI Components
+  const LoadingIndicator = React.memo(() => (
+    loading ? (
+      <View style={styles.loadingContainer}>
+        <ActivityIndicator size="large" color="#8B5CF6" />
+        <Text style={styles.loadingText}>Loading...</Text>
+      </View>
+    ) : null
+  ));
+
+  const ErrorMessage = React.memo(() => (
+    error ? (
+      <View style={styles.errorContainer}>
+        <Text style={styles.errorText}>{error}</Text>
+      </View>
+    ) : null
+  ));
+
+  const CustomTextInput = React.memo(({ 
+    label, 
+    value, 
+    onChangeText, 
+    placeholder, 
+    secureTextEntry = false, 
+    keyboardType = 'default',
+    multiline = false,
+    required = false,
+    onSubmitEditing,
+    returnKeyType = 'next',
+    refKey,
+    autoFocus = false,
+    autoComplete,
+    textContentType,
+  }: any) => {
+    // Use local state to prevent re-renders from parent
+    const [localValue, setLocalValue] = useState(value || '');
+    const [isFocused, setIsFocused] = useState(false);
+    
+    // Sync with parent value only when not focused
+    useEffect(() => {
+      if (!isFocused) {
+        setLocalValue(value || '');
+      }
+    }, [value, isFocused]);
+    
+    const handleChange = useCallback((text: string) => {
+      setLocalValue(text);
+      onChangeText(text);
+    }, [onChangeText]);
+    
+    const handleFocus = useCallback(() => {
+      setIsFocused(true);
+    }, []);
+    
+    const handleBlur = useCallback(() => {
+      setIsFocused(false);
+      // Sync final value with parent
+      onChangeText(localValue);
+    }, [localValue, onChangeText]);
+    
+    return (
+      <View style={styles.inputContainer}>
+        <Text style={styles.inputLabel}>
+          {label} {required && <Text style={styles.required}>*</Text>}
+        </Text>
+        <TextInput
+          ref={(ref) => {
+            if (refKey) {
+              formRefs.current[refKey] = ref;
+            }
+          }}
+          style={[
+            styles.input, 
+            multiline && styles.multilineInput,
+            isFocused && styles.inputFocused
+          ]}
+          value={localValue}
+          onChangeText={handleChange}
+          placeholder={placeholder}
+          placeholderTextColor="#9ca3af"
+          secureTextEntry={secureTextEntry}
+          keyboardType={keyboardType}
+          multiline={multiline}
+          onSubmitEditing={onSubmitEditing}
+          returnKeyType={returnKeyType}
+          autoFocus={autoFocus}
+          blurOnSubmit={false}
+          onFocus={handleFocus}
+          onBlur={handleBlur}
+          autoCorrect={false}
+          spellCheck={false}
+          editable={true}
+          selectTextOnFocus={false}
+          {...(autoComplete && { autoComplete })}
+          {...(textContentType && { textContentType })}
+        />
+      </View>
+    );
+  });
+
+  const StatusSelector = React.memo(() => (
+    <View style={styles.inputContainer}>
+      <Text style={styles.inputLabel}>Status</Text>
+      <View style={styles.statusButtons}>
+        <TouchableOpacity
+          style={[
+            styles.statusButton,
+            formData.status === 'Active' && styles.statusButtonActive
+          ]}
+          onPress={() => setFormData(prev => ({ ...prev, status: 'Active' }))}
+        >
+          <Text style={[
+            styles.statusText,
+            formData.status === 'Active' && styles.statusTextActive
+          ]}>
+            Active
+          </Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[
+            styles.statusButton,
+            formData.status === 'Inactive' && styles.statusButtonInactive
+          ]}
+          onPress={() => setFormData(prev => ({ ...prev, status: 'Inactive' }))}
+        >
+          <Text style={[
+            styles.statusText,
+            formData.status === 'Inactive' && styles.statusTextActive
+          ]}>
+            Inactive
+          </Text>
+        </TouchableOpacity>
+      </View>
+    </View>
+  ));
+
+  // Screen Components
   const SideMenu = () => {
     if (!showSideMenu) return null;
 
     return (
       <View style={styles.sideMenuOverlay}>
-        <TouchableOpacity style={styles.sideMenuBackdrop} onPress={() => setShowSideMenu(false)} />
+        <TouchableOpacity 
+          style={styles.sideMenuBackdrop} 
+          onPress={() => setShowSideMenu(false)} 
+        />
         <View style={styles.sideMenuContainer}>
           <LinearGradient colors={['#8B5CF6', '#7C3AED']} style={styles.sideMenuContent}>
             <View style={styles.sideMenuHeader}>
-              <TouchableOpacity style={styles.closeButton} onPress={() => setShowSideMenu(false)}>
+              <TouchableOpacity 
+                style={styles.closeButton} 
+                onPress={() => setShowSideMenu(false)}
+              >
                 <Text style={styles.closeIcon}>✕</Text>
               </TouchableOpacity>
               <Text style={styles.sideMenuTitle}>Inventor.io</Text>
@@ -334,24 +689,17 @@ const InventoryApp = () => {
             )}
 
             <View style={styles.sideMenuItems}>
-              <TouchableOpacity style={styles.sideMenuItem} onPress={() => { setCurrentScreen('dashboard'); setShowSideMenu(false); setSearchQuery(''); }}>
-                <Text style={styles.sideMenuItemText}>Home</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.sideMenuItem} onPress={() => { setCurrentScreen('products'); setShowSideMenu(false); setSearchQuery(''); }}>
-                <Text style={styles.sideMenuItemText}>Products</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.sideMenuItem} onPress={() => { setCurrentScreen('categories'); setShowSideMenu(false); setSearchQuery(''); }}>
-                <Text style={styles.sideMenuItemText}>Categories</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.sideMenuItem}>
-                <Text style={styles.sideMenuItemText}>Stores</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.sideMenuItem}>
-                <Text style={styles.sideMenuItemText}>Finances</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.sideMenuItem}>
-                <Text style={styles.sideMenuItemText}>Settings</Text>
-              </TouchableOpacity>
+              {['dashboard', 'products', 'categories'].map((screen) => (
+                <TouchableOpacity
+                  key={screen}
+                  style={styles.sideMenuItem}
+                  onPress={() => navigateToScreen(screen)}
+                >
+                  <Text style={styles.sideMenuItemText}>
+                    {screen.charAt(0).toUpperCase() + screen.slice(1)}
+                  </Text>
+                </TouchableOpacity>
+              ))}
             </View>
 
             <TouchableOpacity style={styles.logoutButton} onPress={handleLogout}>
@@ -363,600 +711,359 @@ const InventoryApp = () => {
     );
   };
 
-  // Register Screen Component
-  const RegisterScreen = () => {
-    return (
-      <SafeAreaView style={styles.container}>
-        <LinearGradient colors={['#8B5CF6', '#7C3AED']} style={styles.loginContainer}>
-          <StatusBar barStyle="light-content" />
-          <View style={styles.loginContent}>
-            <Text style={styles.loginTitle}>Sign Up</Text>
-            <Text style={styles.loginSubtitle}>Create your Inventor.io account</Text>
-            
-            <View style={styles.inputContainer}>
-              <Text style={styles.inputLabel}>Username</Text>
-              <TextInput
-                style={styles.input}
-                value={username}
-                onChangeText={setUsername}
-                placeholder="Enter your username"
-                placeholderTextColor="#ccc"
-                autoCapitalize="none"
-                autoCorrect={false}
-              />
-            </View>
-
-            <View style={styles.inputContainer}>
-              <Text style={styles.inputLabel}>Email (Optional)</Text>
-              <TextInput
-                style={styles.input}
-                value={email}
-                onChangeText={setEmail}
-                placeholder="Enter your email"
-                placeholderTextColor="#ccc"
-                keyboardType="email-address"
-                autoCapitalize="none"
-                autoCorrect={false}
-              />
-            </View>
-
-            <View style={styles.inputContainer}>
-              <Text style={styles.inputLabel}>Password</Text>
-              <TextInput
-                style={styles.input}
-                value={password}
-                onChangeText={setPassword}
-                placeholder="Enter your password (min 6 characters)"
-                placeholderTextColor="#ccc"
-                secureTextEntry
-              />
-            </View>
-
-            {loading && <Text style={styles.loadingText}>Creating Account...</Text>}
-            {error && <Text style={styles.errorText}>{error}</Text>}
-
-            <TouchableOpacity 
-              style={[styles.loginButton, loading && styles.disabledButton]} 
-              onPress={handleRegister}
-              disabled={loading}
-            >
-              <Text style={styles.loginButtonText}>Sign Up</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity 
-              style={styles.switchScreenButton} 
-              onPress={() => {
-                setCurrentScreen('login');
-                setError(null);
-              }}
-            >
-              <Text style={styles.switchScreenText}>Already have an account? Log in</Text>
-            </TouchableOpacity>
-          </View>
-        </LinearGradient>
-      </SafeAreaView>
-    );
-  };
-
-  // Login Screen Component
   const LoginScreen = () => {
+    // Memoize handlers to prevent re-creation
+    const handleUsernameChange = useCallback((text: string) => setUsername(text), []);
+    const handlePasswordChange = useCallback((text: string) => setPassword(text), []);
+    
     return (
       <SafeAreaView style={styles.container}>
         <LinearGradient colors={['#8B5CF6', '#7C3AED']} style={styles.loginContainer}>
           <StatusBar barStyle="light-content" />
-          <View style={styles.loginContent}>
-            <Text style={styles.loginTitle}>Inventor.io</Text>
-            <Text style={styles.loginSubtitle}>Welcome back! Please login to your account</Text>
-            
-            <View style={styles.inputContainer}>
-              <Text style={styles.inputLabel}>Username</Text>
-              <TextInput
-                style={styles.input}
-                value={username}
-                onChangeText={setUsername}
-                placeholder="Enter your username"
-                placeholderTextColor="#ccc"
-                autoCapitalize="none"
-                autoCorrect={false}
-              />
-            </View>
-
-            <View style={styles.inputContainer}>
-              <Text style={styles.inputLabel}>Password</Text>
-              <TextInput
-                style={styles.input}
-                value={password}
-                onChangeText={setPassword}
-                placeholder="Enter your password"
-                placeholderTextColor="#ccc"
-                secureTextEntry
-              />
-            </View>
-
-            {loading && <Text style={styles.loadingText}>Logging in...</Text>}
-            {error && <Text style={styles.errorText}>{error}</Text>}
-
-            <TouchableOpacity 
-              style={[styles.loginButton, loading && styles.disabledButton]} 
-              onPress={handleLogin}
-              disabled={loading}
-            >
-              <Text style={styles.loginButtonText}>Log in</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity 
-              style={styles.switchScreenButton} 
-              onPress={() => {
-                setCurrentScreen('register');
-                setError(null);
-              }}
-            >
-              <Text style={styles.switchScreenText}>Don't have an account? Sign up</Text>
-            </TouchableOpacity>
-          </View>
-        </LinearGradient>
-      </SafeAreaView>
-    );
-  };
-
-  // Product Detail Screen Component
-  const ProductDetailScreen = () => {
-    if (!selectedProduct) return null;
-
-    return (
-      <SafeAreaView style={styles.container}>
-        <StatusBar barStyle="dark-content" backgroundColor="#f8f9fa" />
-        <View style={styles.header}>
-          <TouchableOpacity 
-            style={styles.menuButton} 
-            onPress={() => {
-              setCurrentScreen('products');
-              setSelectedProduct(null);
-              setSearchQuery('');
-            }}
+          <KeyboardAvoidingView 
+            behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+            style={styles.keyboardAvoidingView}
           >
-            <Text style={styles.menuIcon}>←</Text>
-          </TouchableOpacity>
-          <Text style={styles.headerTitle}>Product Details</Text>
-          <TouchableOpacity style={styles.profileButton}>
-            <Text style={styles.profileIcon}>👤</Text>
-          </TouchableOpacity>
-        </View>
+            <ScrollView 
+              contentContainerStyle={styles.scrollContent}
+              keyboardShouldPersistTaps="handled"
+              showsVerticalScrollIndicator={false}
+            >
+              <View style={styles.loginContent}>
+                <Text style={styles.loginTitle}>Inventor.io</Text>
+                <Text style={styles.loginSubtitle}>Welcome back! Please login to your account</Text>
 
-        <ScrollView style={styles.productDetailContainer}>
-          <View style={styles.productDetailImageContainer}>
-            <Image 
-              source={{ uri: selectedProduct.image || 'https://via.placeholder.com/200' }} 
-              style={styles.productDetailImage}
-              onError={() => console.log(`Failed to load image for ${selectedProduct.name}`)}
-            />
-          </View>
-          <Text style={styles.productDetailName}>{selectedProduct.name}</Text>
-          <Text style={styles.productDetailBrand}>{selectedProduct.brand}</Text>
-          <Text style={styles.productDetailSizes}>Available sizes: {selectedProduct.sizes}</Text>
-          <Text style={styles.productDetailCategory}>Category: {selectedProduct.category}</Text>
+                <CustomTextInput
+                  label="Username"
+                  value={username}
+                  onChangeText={handleUsernameChange}
+                  placeholder="Enter your username"
+                  required
+                  refKey="loginUsername"
+                  onSubmitEditing={() => focusField('loginPassword')}
+                  autoComplete="username"
+                  textContentType="username"
+                />
 
-          <View style={styles.productDetailCard}>
-            <View style={styles.productDetailInfo}>
-              <Text style={styles.productDetailLabel}>Product code: {selectedProduct.productCode}</Text>
-              <Text style={styles.productDetailLabel}>Order name: {selectedProduct.orderName}</Text>
-              <Text style={styles.productDetailLabel}>Stock: {selectedProduct.stock} items</Text>
-              <Text style={styles.productDetailLabel}>Status: {selectedProduct.status}</Text>
-            </View>
-            <View style={styles.qrCodeContainer}>
-              <View style={styles.qrCodePlaceholder}>
-                <Text style={styles.qrCodeText}>QR</Text>
-              </View>
-            </View>
-            <Text style={styles.storeAvailabilityTitle}>Store availability:</Text>
-            {selectedProduct.storeAvailability && selectedProduct.storeAvailability.length > 0 ? (
-              selectedProduct.storeAvailability.map((store, index) => (
-                <View key={index} style={styles.storeAvailabilityItem}>
-                  <Text style={styles.storeLocation}>{store.location}</Text>
-                  <Text style={[styles.storeStatus, { color: store.available ? '#22c55e' : '#ef4444' }]}>
-                    {store.available ? '✓' : '✕'}
-                  </Text>
-                </View>
-              ))
-            ) : (
-              <Text style={styles.productDetailLabel}>No store availability data</Text>
-            )}
-            <Text style={styles.lastUpdate}>Last update {selectedProduct.lastUpdate}</Text>
-          </View>
-        </ScrollView>
+                <CustomTextInput
+                  label="Password"
+                  value={password}
+                  onChangeText={handlePasswordChange}
+                  placeholder="Enter your password"
+                  secureTextEntry
+                  required
+                  refKey="loginPassword"
+                  returnKeyType="done"
+                  onSubmitEditing={handleLogin}
+                  autoComplete="current-password"
+                  textContentType="password"
+                />
 
-        <View style={styles.bottomNav}>
-          <TouchableOpacity style={styles.navItem} onPress={() => { setSearchQuery(''); setCurrentScreen('dashboard'); }}>
-            <Text style={styles.navIcon}>🏠</Text>
-            <Text style={styles.navText}>Home</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.navItem} onPress={() => Alert.alert('Info', 'Add product functionality coming soon!')}>
-            <Text style={styles.navIcon}>➕</Text>
-            <Text style={styles.navText}>Add</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.navItem} onPress={() => { setSearchQuery(''); setCurrentScreen('products'); setSelectedProduct(null); }}>
-            <Text style={styles.navIcon}>📦</Text>
-            <Text style={[styles.navText, { color: '#8B5CF6' }]}>Products</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.navItem} onPress={() => { setSearchQuery(''); setCurrentScreen('categories'); }}>
-            <Text style={styles.navIcon}>📁</Text>
-            <Text style={styles.navText}>Categories</Text>
-          </TouchableOpacity>
-        </View>
-      </SafeAreaView>
-    );
-  };
+                <ErrorMessage />
+                <LoadingIndicator />
 
-  // Categories Screen Component
-  const CategoriesScreen = () => {
-    const categories = Array.from(new Set(products.map(p => p.category)))
-      .map(category => ({
-        id: category,
-        name: category,
-        count: products.filter(p => p.category === category).length,
-        icon: getCategoryIcon(category)
-      }));
+                <TouchableOpacity
+                  style={[styles.loginButton, loading && styles.disabledButton]}
+                  onPress={handleLogin}
+                  disabled={loading}
+                  activeOpacity={0.7}
+                >
+                  {loading ? (
+                    <ActivityIndicator color="#fff" size="small" />
+                  ) : (
+                    <Text style={styles.loginButtonText}>Log in</Text>
+                  )}
+                </TouchableOpacity>
 
-    function getCategoryIcon(category: string): string {
-      const iconMap: { [key: string]: string } = {
-        'bottoms': '👖',
-        'coats': '🧥',
-        'jeans': '👖',
-        'tops': '👕',
-        'shirts': '👔',
-        'accessories': '👜',
-        'shoes': '👟'
-      };
-      return iconMap[category.toLowerCase()] || '📦';
-    }
-
-    return (
-      <SafeAreaView style={styles.container}>
-        <StatusBar barStyle="dark-content" backgroundColor="#f8f9fa" />
-        <View style={styles.header}>
-          <TouchableOpacity style={styles.menuButton} onPress={() => setShowSideMenu(true)}>
-            <Text style={styles.menuIcon}>☰</Text>
-          </TouchableOpacity>
-          <Text style={styles.headerTitle}>Categories</Text>
-          <TouchableOpacity style={styles.profileButton}>
-            <Text style={styles.profileIcon}>👤</Text>
-          </TouchableOpacity>
-        </View>
-
-        <View style={styles.searchContainer}>
-          <View style={styles.searchBar}>
-            <Text style={styles.searchIcon}>🔍</Text>
-            <TextInput
-              style={styles.searchInput}
-              placeholder="Search categories..."
-              placeholderTextColor="#999"
-              value={searchQuery}
-              onChangeText={setSearchQuery}
-            />
-            {searchQuery.length > 0 && (
-              <TouchableOpacity style={styles.clearSearchButton} onPress={() => setSearchQuery('')}>
-                <Text style={styles.clearSearchText}>✕</Text>
-              </TouchableOpacity>
-            )}
-          </View>
-        </View>
-
-        {loading && (
-          <View style={styles.noResultsContainer}>
-            <Text style={styles.noResultsText}>Loading categories...</Text>
-          </View>
-        )}
-        {error && (
-          <View style={styles.noResultsContainer}>
-            <Text style={styles.noResultsText}>Error: {error}</Text>
-            <TouchableOpacity style={styles.clearSearchButton2} onPress={fetchProducts}>
-              <Text style={styles.clearSearchButtonText}>Retry</Text>
-            </TouchableOpacity>
-          </View>
-        )}
-
-        {!loading && !error && searchQuery.length > 0 && (
-          <View style={styles.searchResultsInfo}>
-            <Text style={styles.searchResultsText}>
-              {categories.filter(c => c.name.toLowerCase().includes(searchQuery.toLowerCase())).length} {categories.length === 1 ? 'result' : 'results'} found
-            </Text>
-            <TouchableOpacity onPress={() => setSearchQuery('')}>
-              <Text style={styles.clearSearchLink}>Clear search</Text>
-            </TouchableOpacity>
-          </View>
-        )}
-
-        {!loading && !error && (
-          <ScrollView style={styles.categoriesContainer}>
-            {categories.filter(c => c.name.toLowerCase().includes(searchQuery.toLowerCase())).length === 0 && searchQuery.length > 0 ? (
-              <View style={styles.noResultsContainer}>
-                <Text style={styles.noResultsText}>No categories found</Text>
-                <Text style={styles.noResultsSubtext}>Try a different search term</Text>
-                <TouchableOpacity style={styles.clearSearchButton2} onPress={() => setSearchQuery('')}>
-                  <Text style={styles.clearSearchButtonText}>Clear Search</Text>
+                <TouchableOpacity
+                  style={styles.switchScreenButton}
+                  onPress={() => navigateToScreen('register')}
+                >
+                  <Text style={styles.switchScreenText}>Don't have an account? Sign up</Text>
                 </TouchableOpacity>
               </View>
-            ) : categories.length === 0 ? (
-              <View style={styles.noResultsContainer}>
-                <Text style={styles.noResultsText}>No categories available</Text>
-                <Text style={styles.noResultsSubtext}>Add products to see categories</Text>
-              </View>
-            ) : (
-              categories
-                .filter(c => c.name.toLowerCase().includes(searchQuery.toLowerCase()))
-                .map((category) => (
-                  <TouchableOpacity 
-                    key={category.id} 
-                    style={styles.categoryCard}
-                    onPress={() => {
-                      setSearchQuery(category.name);
-                      setCurrentScreen('products');
-                    }}
-                  >
-                    <View style={styles.categoryIconContainer}>
-                      <Text style={styles.categoryIconText}>{category.icon}</Text>
-                    </View>
-                    <View style={styles.categoryInfo}>
-                      <Text style={styles.categoryName}>{category.name}</Text>
-                      <Text style={styles.categoryCount}>{category.count} items</Text>
-                    </View>
-                  </TouchableOpacity>
-                ))
-            )}
-          </ScrollView>
-        )}
-
-        <View style={styles.bottomNav}>
-          <TouchableOpacity style={styles.navItem} onPress={() => { setSearchQuery(''); setCurrentScreen('dashboard'); }}>
-            <Text style={styles.navIcon}>🏠</Text>
-            <Text style={styles.navText}>Home</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.navItem} onPress={() => Alert.alert('Info', 'Add product functionality coming soon!')}>
-            <Text style={styles.navIcon}>➕</Text>
-            <Text style={styles.navText}>Add</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.navItem} onPress={() => { setSearchQuery(''); setCurrentScreen('products'); }}>
-            <Text style={styles.navIcon}>📦</Text>
-            <Text style={[styles.navText, { color: '#8B5CF6' }]}>Products</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.navItem} onPress={() => { setSearchQuery(''); setCurrentScreen('categories'); }}>
-            <Text style={styles.navIcon}>📁</Text>
-            <Text style={[styles.navText, { color: '#8B5CF6' }]}>Categories</Text>
-          </TouchableOpacity>
-        </View>
+            </ScrollView>
+          </KeyboardAvoidingView>
+        </LinearGradient>
       </SafeAreaView>
     );
   };
 
-  // Dashboard Screen Component
-  const DashboardScreen = () => {
-    const activityData = [
-      { label: 'TOTAL PRODUCTS', value: products.length, color: '#8B5CF6' },
-      { label: 'LOW STOCK', value: products.filter(p => p.stock < 10).length, color: '#ef4444' },
-      { label: 'CATEGORIES', value: new Set(products.map(p => p.category)).size, color: '#22c55e' },
-      { label: 'ACTIVE ITEMS', value: products.filter(p => p.status === 'Active').length, color: '#8B5CF6' },
+  const RegisterScreen = () => {
+    // Memoize handlers to prevent re-creation
+    const handleUsernameChange = useCallback((text: string) => setUsername(text), []);
+    const handleEmailChange = useCallback((text: string) => setEmail(text), []);
+    const handlePasswordChange = useCallback((text: string) => setPassword(text), []);
+    
+    return (
+      <SafeAreaView style={styles.container}>
+        <LinearGradient colors={['#8B5CF6', '#7C3AED']} style={styles.loginContainer}>
+          <StatusBar barStyle="light-content" />
+          <KeyboardAvoidingView 
+            behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+            style={styles.keyboardAvoidingView}
+          >
+            <ScrollView 
+              contentContainerStyle={styles.scrollContent}
+              keyboardShouldPersistTaps="handled"
+              showsVerticalScrollIndicator={false}
+            >
+              <View style={styles.loginContent}>
+                <Text style={styles.loginTitle}>Sign Up</Text>
+                <Text style={styles.loginSubtitle}>Create your Inventor.io account</Text>
+
+                <CustomTextInput
+                  label="Username"
+                  value={username}
+                  onChangeText={handleUsernameChange}
+                  placeholder="Enter your username"
+                  required
+                  refKey="regUsername"
+                  onSubmitEditing={() => focusField('regEmail')}
+                  autoComplete="username"
+                  textContentType="username"
+                />
+
+                <CustomTextInput
+                  label="Email (Optional)"
+                  value={email}
+                  onChangeText={handleEmailChange}
+                  placeholder="Enter your email"
+                  keyboardType="email-address"
+                  refKey="regEmail"
+                  onSubmitEditing={() => focusField('regPassword')}
+                  autoComplete="email"
+                  textContentType="emailAddress"
+                />
+
+                <CustomTextInput
+                  label="Password"
+                  value={password}
+                  onChangeText={handlePasswordChange}
+                  placeholder="Enter your password (min 6 characters)"
+                  secureTextEntry
+                  required
+                  refKey="regPassword"
+                  returnKeyType="done"
+                  onSubmitEditing={handleRegister}
+                  autoComplete="new-password"
+                  textContentType="newPassword"
+                />
+
+                <ErrorMessage />
+                <LoadingIndicator />
+
+                <TouchableOpacity
+                  style={[styles.loginButton, loading && styles.disabledButton]}
+                  onPress={handleRegister}
+                  disabled={loading}
+                  activeOpacity={0.7}
+                >
+                  {loading ? (
+                    <ActivityIndicator color="#fff" size="small" />
+                  ) : (
+                    <Text style={styles.loginButtonText}>Sign Up</Text>
+                  )}
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={styles.switchScreenButton}
+                  onPress={() => navigateToScreen('login')}
+                >
+                  <Text style={styles.switchScreenText}>Already have an account? Log in</Text>
+                </TouchableOpacity>
+              </View>
+            </ScrollView>
+          </KeyboardAvoidingView>
+        </LinearGradient>
+      </SafeAreaView>
+    );
+  };
+
+  const Header = ({ title, showBack = false, onBack }: any) => (
+    <View style={styles.header}>
+      <TouchableOpacity
+        style={styles.menuButton}
+        onPress={showBack ? onBack : () => setShowSideMenu(true)}
+      >
+        <Text style={styles.menuIcon}>{showBack ? '←' : '☰'}</Text>
+      </TouchableOpacity>
+      <Text style={styles.headerTitle}>{title}</Text>
+      <TouchableOpacity style={styles.profileButton}>
+        <Text style={styles.profileIcon}>👤</Text>
+      </TouchableOpacity>
+    </View>
+  );
+
+  const SearchBar = ({ placeholder = "Search..." }: any) => (
+    <View style={styles.searchContainer}>
+      <View style={styles.searchBar}>
+        <Text style={styles.searchIcon}>🔍</Text>
+        <TextInput
+          ref={(searchRef) => {
+            if (searchRef) {
+              // Don't store search refs in form refs to avoid conflicts
+            }
+          }}
+          style={styles.searchInput}
+          placeholder={placeholder}
+          placeholderTextColor="#999"
+          value={searchQuery}
+          onChangeText={setSearchQuery}
+          returnKeyType="search"
+          autoCorrect={false}
+          clearButtonMode="while-editing"
+          editable={true}
+        />
+        {searchQuery.length > 0 && (
+          <TouchableOpacity 
+            style={styles.clearSearchButton} 
+            onPress={() => setSearchQuery('')}
+          >
+            <Text style={styles.clearSearchText}>✕</Text>
+          </TouchableOpacity>
+        )}
+      </View>
+    </View>
+  );
+
+  const BottomNavigation = ({ activeScreen }: any) => {
+    const navItems = [
+      { key: 'dashboard', icon: '🏠', label: 'Home' },
+      { key: 'add-product', icon: '➕', label: 'Add', adminOnly: true },
+      { key: 'products', icon: '📦', label: 'Products' },
+      { key: 'categories', icon: '📁', label: 'Categories' },
     ];
 
-    const salesData = [
-      { label: 'Active', value: products.filter(p => p.status === 'Active').length * 2, color: '#22c55e' },
-      { label: 'Inactive', value: products.filter(p => p.status === 'Inactive').length * 2, color: '#ef4444' },
-      { label: 'Low Stock', value: products.filter(p => p.stock < 10).length * 3, color: '#f59e0b' },
-      { label: 'In Stock', value: products.filter(p => p.stock >= 10).length * 2, color: '#8B5CF6' },
+    return (
+      <View style={styles.bottomNav}>
+        {navItems.map((item) => {
+          if (item.adminOnly && user?.role !== 'admin') return null;
+          
+          return (
+            <TouchableOpacity
+              key={item.key}
+              style={styles.navItem}
+              onPress={() => {
+                if (item.adminOnly && user?.role !== 'admin') {
+                  showAlert('Access Denied', 'Only admins can add products.');
+                  return;
+                }
+                if (item.key === 'add-product') {
+                  resetForm();
+                  setSelectedProduct(null);
+                }
+                navigateToScreen(item.key);
+              }}
+            >
+              <Text style={styles.navIcon}>{item.icon}</Text>
+              <Text style={[
+                styles.navText,
+                activeScreen === item.key && styles.navTextActive
+              ]}>
+                {item.label}
+              </Text>
+            </TouchableOpacity>
+          );
+        })}
+      </View>
+    );
+  };
+
+  const DashboardScreen = () => {
+    const stats = [
+      { label: 'TOTAL PRODUCTS', value: products.length, color: '#8B5CF6' },
+      { label: 'LOW STOCK', value: products.filter(p => (p.stock || 0) < 10).length, color: '#ef4444' },
+      { label: 'CATEGORIES', value: new Set(products.map(p => p.category).filter(Boolean)).size, color: '#22c55e' },
+      { label: 'ACTIVE ITEMS', value: products.filter(p => p.status === 'Active').length, color: '#3b82f6' },
     ];
 
     return (
       <SafeAreaView style={styles.container}>
         <StatusBar barStyle="dark-content" backgroundColor="#f8f9fa" />
-        <View style={styles.header}>
-          <TouchableOpacity style={styles.menuButton} onPress={() => setShowSideMenu(true)}>
-            <Text style={styles.menuIcon}>☰</Text>
-          </TouchableOpacity>
-          <Text style={styles.headerTitle}>Inventor.io</Text>
-          <TouchableOpacity style={styles.profileButton}>
-            <Text style={styles.profileIcon}>👤</Text>
-          </TouchableOpacity>
-        </View>
+        <Header title="Inventor.io" />
 
         <ScrollView style={styles.dashboardContent}>
-          {/* Connection Status Indicator */}
           <View style={styles.connectionStatus}>
-            <Text style={[styles.connectionText, { color: authToken ? '#22c55e' : '#ef4444' }]}>
+            <Text style={[
+              styles.connectionText,
+              { color: authToken ? '#22c55e' : '#ef4444' }
+            ]}>
               {authToken ? '🟢 Connected to Cloud' : '🔴 Not Connected'}
             </Text>
           </View>
 
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>Inventory Overview</Text>
-            <View style={styles.activityGrid}>
-              {activityData.map((item, index) => (
-                <View key={index} style={styles.activityCard}>
-                  <Text style={[styles.activityValue, { color: item.color }]}>{item.value}</Text>
-                  <Text style={styles.activityLabel}>{item.label}</Text>
+            <View style={styles.statsGrid}>
+              {stats.map((stat, index) => (
+                <View key={index} style={styles.statCard}>
+                  <Text style={[styles.statValue, { color: stat.color }]}>
+                    {stat.value}
+                  </Text>
+                  <Text style={styles.statLabel}>{stat.label}</Text>
                 </View>
               ))}
-            </View>
-          </View>
-
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Product Status Distribution</Text>
-            <View style={styles.chartContainer}>
-              <View style={styles.chartBars}>
-                {salesData.map((item, index) => (
-                  <View key={index} style={styles.barContainer}>
-                    <View style={[styles.bar, { height: Math.max(item.value * 2, 10), backgroundColor: item.color }]} />
-                    <Text style={styles.barLabel}>{item.label}</Text>
-                    <Text style={styles.barValue}>{item.value}</Text>
-                  </View>
-                ))}
-              </View>
             </View>
           </View>
 
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>Top Categories</Text>
-            <View style={styles.categoryIconsGrid}>
-              {Array.from(new Set(products.map(p => p.category))).slice(0, 6).map((category, index) => (
-                <TouchableOpacity 
-                  key={index} 
-                  style={styles.categoryIconCard}
-                  onPress={() => {
-                    setSearchQuery(category);
-                    setCurrentScreen('products');
-                  }}
-                >
-                  <Text style={styles.categoryIcon}>
-                    {category.toLowerCase().includes('bottom') || category.toLowerCase().includes('jean') ? '👖' :
-                     category.toLowerCase().includes('top') || category.toLowerCase().includes('shirt') ? '👕' :
-                     category.toLowerCase().includes('coat') || category.toLowerCase().includes('jacket') ? '🧥' :
-                     category.toLowerCase().includes('shoe') ? '👟' :
-                     category.toLowerCase().includes('access') ? '👜' : '📦'}
-                  </Text>
-                  <Text style={styles.categoryName2}>{category}</Text>
-                </TouchableOpacity>
-              ))}
+            <View style={styles.categoryGrid}>
+              {Array.from(new Set(products.map(p => p.category)))
+                .filter(Boolean)
+                .slice(0, 6)
+                .map((category, index) => (
+                  <TouchableOpacity
+                    key={index}
+                    style={styles.categoryCard}
+                    onPress={() => {
+                      setSearchQuery(category!);
+                      navigateToScreen('products');
+                    }}
+                  >
+                    <Text style={styles.categoryIcon}>
+                      {getCategoryIcon(category!)}
+                    </Text>
+                    <Text style={styles.categoryName}>{category}</Text>
+                  </TouchableOpacity>
+                ))}
             </View>
-            <TouchableOpacity style={styles.viewMoreLink} onPress={() => setCurrentScreen('categories')}>
-              <Text style={styles.viewMoreLinkText}>View more</Text>
+            <TouchableOpacity 
+              style={styles.viewAllButton} 
+              onPress={() => navigateToScreen('categories')}
+            >
+              <Text style={styles.viewAllText}>View All Categories</Text>
             </TouchableOpacity>
-          </View>
-
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Inventory Statistics</Text>
-            <View style={styles.categoryStatsCard}>
-              <View style={styles.categoryStatRow}>
-                <Text style={styles.categoryStatLabel}>Low stock items</Text>
-                <View style={styles.categoryStatValue}>
-                  <Text style={[styles.categoryStatNumber, { color: '#ef4444' }]}>
-                    {products.filter(p => p.stock < 10).length}
-                  </Text>
-                  <Text style={styles.categoryStatIcon}>⚠️</Text>
-                </View>
-              </View>
-              <View style={styles.categoryStatRow}>
-                <Text style={styles.categoryStatLabel}>Item categories</Text>
-                <Text style={styles.categoryStatNumber}>{new Set(products.map(p => p.category)).size}</Text>
-              </View>
-              <View style={styles.categoryStatRow}>
-                <Text style={styles.categoryStatLabel}>Total products</Text>
-                <Text style={styles.categoryStatNumber}>{products.length}</Text>
-              </View>
-              <View style={styles.categoryStatRow}>
-                <Text style={styles.categoryStatLabel}>Active products</Text>
-                <Text style={[styles.categoryStatNumber, { color: '#22c55e' }]}>
-                  {products.filter(p => p.status === 'Active').length}
-                </Text>
-              </View>
-            </View>
-          </View>
-
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Quick Actions</Text>
-            <View style={styles.storesListCard}>
-              <TouchableOpacity style={styles.storeItem} onPress={() => setCurrentScreen('products')}>
-                <Text style={styles.storeLocation}>View All Products</Text>
-                <Text style={styles.storeArrow}>›</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.storeItem} onPress={() => setCurrentScreen('categories')}>
-                <Text style={styles.storeLocation}>Browse Categories</Text>
-                <Text style={styles.storeArrow}>›</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.storeItem} onPress={() => Alert.alert('Info', 'Add product functionality coming soon!')}>
-                <Text style={styles.storeLocation}>Add New Product</Text>
-                <Text style={styles.storeArrow}>›</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.storeItem}>
-                <Text style={styles.storeLocation}>Low Stock Alert</Text>
-                <Text style={styles.storeArrow}>›</Text>
-              </TouchableOpacity>
-            </View>
           </View>
         </ScrollView>
 
-        <View style={styles.bottomNav}>
-          <TouchableOpacity style={styles.navItem} onPress={() => { setSearchQuery(''); setCurrentScreen('dashboard'); }}>
-            <Text style={styles.navIcon}>🏠</Text>
-            <Text style={[styles.navText, { color: '#8B5CF6' }]}>Home</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.navItem} onPress={() => Alert.alert('Info', 'Add product functionality coming soon!')}>
-            <Text style={styles.navIcon}>➕</Text>
-            <Text style={styles.navText}>Add</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.navItem} onPress={() => { setSearchQuery(''); setCurrentScreen('products'); }}>
-            <Text style={styles.navIcon}>📦</Text>
-            <Text style={styles.navText}>Products</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.navItem} onPress={() => { setSearchQuery(''); setCurrentScreen('categories'); }}>
-            <Text style={styles.navIcon}>📁</Text>
-            <Text style={styles.navText}>Categories</Text>
-          </TouchableOpacity>
-        </View>
+        <BottomNavigation activeScreen="dashboard" />
       </SafeAreaView>
     );
   };
 
-  // Products Screen Component
   const ProductsScreen = () => {
-    const filteredProducts = products.filter((product) =>
-      product.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      product.category.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      product.brand.toLowerCase().includes(searchQuery.toLowerCase())
-    );
+    const filteredProducts = products.filter(product => {
+      const name = product.name || '';
+      const category = product.category || '';
+      const brand = product.brand || '';
+      const productCode = product.productCode || '';
+      const query = searchQuery.toLowerCase();
+      
+      return name.toLowerCase().includes(query) ||
+             category.toLowerCase().includes(query) ||
+             brand.toLowerCase().includes(query) ||
+             productCode.toLowerCase().includes(query);
+    });
 
     return (
       <SafeAreaView style={styles.container}>
         <StatusBar barStyle="dark-content" backgroundColor="#f8f9fa" />
-        <View style={styles.header}>
-          <TouchableOpacity style={styles.menuButton} onPress={() => setShowSideMenu(true)}>
-            <Text style={styles.menuIcon}>☰</Text>
-          </TouchableOpacity>
-          <Text style={styles.headerTitle}>Products</Text>
-          <TouchableOpacity style={styles.profileButton}>
-            <Text style={styles.profileIcon}>👤</Text>
-          </TouchableOpacity>
-        </View>
+        <Header title="Products" />
+        <SearchBar placeholder="Search products..." />
 
-        <View style={styles.searchContainer}>
-          <View style={styles.searchBar}>
-            <Text style={styles.searchIcon}>🔍</Text>
-            <TextInput
-              style={styles.searchInput}
-              placeholder="Search products..."
-              placeholderTextColor="#999"
-              value={searchQuery}
-              onChangeText={setSearchQuery}
-            />
-            {searchQuery.length > 0 && (
-              <TouchableOpacity style={styles.clearSearchButton} onPress={() => setSearchQuery('')}>
-                <Text style={styles.clearSearchText}>✕</Text>
-              </TouchableOpacity>
-            )}
-          </View>
-          <TouchableOpacity 
-            style={styles.addButton}
-            onPress={() => Alert.alert('Info', 'Add product functionality coming soon!')}
-          >
-            <Text style={styles.addButtonText}>+ Add</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.filterButton} onPress={fetchProducts}>
-            <Text style={styles.filterText}>Refresh</Text>
-          </TouchableOpacity>
-        </View>
-
-        {loading && (
-          <View style={styles.noResultsContainer}>
-            <Text style={styles.noResultsText}>Loading products...</Text>
-          </View>
-        )}
-        {error && (
-          <View style={styles.noResultsContainer}>
-            <Text style={styles.noResultsText}>Error: {error}</Text>
-            <TouchableOpacity style={styles.clearSearchButton2} onPress={fetchProducts}>
-              <Text style={styles.clearSearchButtonText}>Retry</Text>
-            </TouchableOpacity>
-          </View>
-        )}
-
-        {!loading && !error && searchQuery.length > 0 && (
+        {searchQuery.length > 0 && (
           <View style={styles.searchResultsInfo}>
             <Text style={styles.searchResultsText}>
               {filteredProducts.length} {filteredProducts.length === 1 ? 'result' : 'results'} found
@@ -967,757 +1074,1369 @@ const InventoryApp = () => {
           </View>
         )}
 
-        {!loading && !error && (
-          <ScrollView style={styles.productsList}>
-            {filteredProducts.length === 0 && searchQuery.length > 0 ? (
-              <View style={styles.noResultsContainer}>
-                <Text style={styles.noResultsText}>No products found</Text>
-                <Text style={styles.noResultsSubtext}>Try a different search term</Text>
-                <TouchableOpacity style={styles.clearSearchButton2} onPress={() => setSearchQuery('')}>
-                  <Text style={styles.clearSearchButtonText}>Clear Search</Text>
-                </TouchableOpacity>
-              </View>
-            ) : filteredProducts.length === 0 && products.length === 0 ? (
-              <View style={styles.noResultsContainer}>
-                <Text style={styles.noResultsText}>No products available</Text>
-                <Text style={styles.noResultsSubtext}>Add some products to get started</Text>
-              </View>
-            ) : (
-              filteredProducts.map((product) => (
-                <View key={product.id} style={styles.productCard}>
-                  <Image 
-                    source={{ uri: product.image || 'https://via.placeholder.com/60' }} 
-                    style={styles.productImage}
-                    onError={() => console.log(`Failed to load image for ${product.name}`)}
-                  />
-                  <View style={styles.productInfo}>
-                    <View style={styles.productDetails}>
-                      <Text style={styles.stockText}>Stock: {product.stock} in stock</Text>
-                      <Text style={styles.categoryText}>Category: {product.category}</Text>
-                      <Text style={styles.locationText}>Location: {product.location}</Text>
-                      <Text style={styles.brandText}>Brand: {product.brand}</Text>
-                    </View>
-                    <View style={styles.productActions}>
-                      <TouchableOpacity style={[styles.statusButton, { backgroundColor: product.status === 'Active' ? '#22c55e' : '#ef4444' }]}>
-                        <Text style={styles.statusText}>{product.status}</Text>
-                      </TouchableOpacity>
-                      <TouchableOpacity style={styles.moreButton} onPress={() => {
-                        setSelectedProduct(product);
-                        setCurrentScreen('product-detail');
-                      }}>
-                        <Text style={styles.moreIcon}>›</Text>
-                      </TouchableOpacity>
-                    </View>
-                  </View>
-                  <Text style={styles.productName}>{product.name}</Text>
+        <ScrollView style={styles.productsContainer}>
+          <LoadingIndicator />
+          <ErrorMessage />
+          
+          {!loading && !error && (
+            <>
+              {filteredProducts.length === 0 ? (
+                <View style={styles.emptyState}>
+                  <Text style={styles.emptyStateTitle}>
+                    {searchQuery ? 'No products found' : 'No products available'}
+                  </Text>
+                  <Text style={styles.emptyStateSubtitle}>
+                    {searchQuery ? 'Try a different search term' : 'Add a product to get started'}
+                  </Text>
+                  {!searchQuery && user?.role === 'admin' && (
+                    <TouchableOpacity
+                      style={styles.emptyStateButton}
+                      onPress={() => {
+                        resetForm();
+                        navigateToScreen('add-product');
+                      }}
+                    >
+                      <Text style={styles.emptyStateButtonText}>Add Product</Text>
+                    </TouchableOpacity>
+                  )}
+                  {searchQuery && (
+                    <TouchableOpacity
+                      style={styles.emptyStateButton}
+                      onPress={() => setSearchQuery('')}
+                    >
+                      <Text style={styles.emptyStateButtonText}>Clear Search</Text>
+                    </TouchableOpacity>
+                  )}
                 </View>
-              ))
-            )}
-          </ScrollView>
-        )}
+              ) : (
+                filteredProducts.map(product => (
+                  <TouchableOpacity
+                    key={product.id}
+                    style={styles.productCard}
+                    onPress={() => navigateToScreen('product-detail', product)}
+                  >
+                    <Image
+                      source={{ uri: product.image || 'https://via.placeholder.com/80' }}
+                      style={styles.productImage}
+                      defaultSource={{ uri: 'https://via.placeholder.com/80' }}
+                    />
+                    <View style={styles.productInfo}>
+                      <Text style={styles.productName} numberOfLines={2}>
+                        {product.name}
+                      </Text>
+                      <Text style={styles.productCategory}>
+                        {product.category || 'No category'}
+                      </Text>
+                      <View style={styles.productDetails}>
+                        <Text style={styles.productPrice}>
+                          ${product.price ? Number(product.price).toFixed(2) : '0.00'}
+                        </Text>
+                        <Text style={[
+                          styles.productStock,
+                          { color: (product.stock || 0) < 10 ? '#ef4444' : '#22c55e' }
+                        ]}>
+                          Stock: {product.stock || 0}
+                        </Text>
+                      </View>
+                      <View style={styles.productFooter}>
+                        <Text style={[
+                          styles.productStatus,
+                          { 
+                            color: product.status === 'Active' ? '#22c55e' : '#ef4444',
+                            backgroundColor: product.status === 'Active' ? 'rgba(34, 197, 94, 0.1)' : 'rgba(239, 68, 68, 0.1)'
+                          }
+                        ]}>
+                          {product.status}
+                        </Text>
+                        {product.brand && (
+                          <Text style={styles.productBrand}>
+                            {product.brand}
+                          </Text>
+                        )}
+                      </View>
+                    </View>
+                  </TouchableOpacity>
+                ))
+              )}
+            </>
+          )}
+        </ScrollView>
 
-        <View style={styles.bottomNav}>
-          <TouchableOpacity style={styles.navItem} onPress={() => { setSearchQuery(''); setCurrentScreen('dashboard'); }}>
-            <Text style={styles.navIcon}>🏠</Text>
-            <Text style={styles.navText}>Home</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.navItem} onPress={() => Alert.alert('Info', 'Add product functionality coming soon!')}>
-            <Text style={styles.navIcon}>➕</Text>
-            <Text style={styles.navText}>Add</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.navItem} onPress={() => { setSearchQuery(''); setCurrentScreen('products'); }}>
-            <Text style={styles.navIcon}>📦</Text>
-            <Text style={[styles.navText, { color: '#8B5CF6' }]}>Products</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.navItem} onPress={() => { setSearchQuery(''); setCurrentScreen('categories'); }}>
-            <Text style={styles.navIcon}>📁</Text>
-            <Text style={styles.navText}>Categories</Text>
-          </TouchableOpacity>
-        </View>
+        <BottomNavigation activeScreen="products" />
       </SafeAreaView>
     );
   };
 
-  // Main Render
+  const ProductDetailScreen = () => {
+    if (!selectedProduct) return null;
+
+    return (
+      <SafeAreaView style={styles.container}>
+        <StatusBar barStyle="dark-content" backgroundColor="#f8f9fa" />
+        <Header 
+          title="Product Details" 
+          showBack 
+          onBack={() => navigateToScreen('products')} 
+        />
+
+        <ScrollView style={styles.productDetailContainer}>
+          <View style={styles.productDetailImageContainer}>
+            <Image
+              source={{ uri: selectedProduct.image || 'https://via.placeholder.com/200' }}
+              style={styles.productDetailImage}
+              defaultSource={{ uri: 'https://via.placeholder.com/200' }}
+            />
+          </View>
+          
+          <View style={styles.productDetailInfo}>
+            <Text style={styles.productDetailName}>{selectedProduct.name}</Text>
+            <Text style={styles.productDetailBrand}>
+              {selectedProduct.brand || 'No brand'}
+            </Text>
+            <Text style={styles.productDetailCategory}>
+              {selectedProduct.category || 'No category'}
+            </Text>
+          </View>
+
+          <View style={styles.detailCard}>
+            <View style={styles.detailRow}>
+              <Text style={styles.detailLabel}>Price:</Text>
+              <Text style={styles.detailValue}>
+                ${selectedProduct.price ? Number(selectedProduct.price).toFixed(2) : '0.00'}
+              </Text>
+            </View>
+            <View style={styles.detailRow}>
+              <Text style={styles.detailLabel}>Stock:</Text>
+              <Text style={[
+                styles.detailValue,
+                { color: (selectedProduct.stock || 0) < 10 ? '#ef4444' : '#22c55e' }
+              ]}>
+                {selectedProduct.stock || 0} items
+              </Text>
+            </View>
+            <View style={styles.detailRow}>
+              <Text style={styles.detailLabel}>Status:</Text>
+              <Text style={[
+                styles.detailValue,
+                { color: selectedProduct.status === 'Active' ? '#22c55e' : '#ef4444' }
+              ]}>
+                {selectedProduct.status}
+              </Text>
+            </View>
+            {selectedProduct.productCode && (
+              <View style={styles.detailRow}>
+                <Text style={styles.detailLabel}>Product Code:</Text>
+                <Text style={styles.detailValue}>{selectedProduct.productCode}</Text>
+              </View>
+            )}
+            {selectedProduct.sizes && (
+              <View style={styles.detailRow}>
+                <Text style={styles.detailLabel}>Sizes:</Text>
+                <Text style={styles.detailValue}>{selectedProduct.sizes}</Text>
+              </View>
+            )}
+            {selectedProduct.location && (
+              <View style={styles.detailRow}>
+                <Text style={styles.detailLabel}>Location:</Text>
+                <Text style={styles.detailValue}>{selectedProduct.location}</Text>
+              </View>
+            )}
+          </View>
+
+          {selectedProduct.description && (
+            <View style={styles.detailCard}>
+              <Text style={styles.sectionTitle}>Description</Text>
+              <Text style={styles.descriptionText}>{selectedProduct.description}</Text>
+            </View>
+          )}
+
+          {user?.role === 'admin' && (
+            <View style={styles.actionButtons}>
+              <TouchableOpacity
+                style={[styles.actionButton, styles.editButton]}
+                onPress={handleEditProduct}
+              >
+                <Text style={styles.actionButtonText}>Edit Product</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.actionButton, styles.deleteButton]}
+                onPress={() => handleDeleteProduct(selectedProduct.id)}
+              >
+                <Text style={styles.actionButtonText}>Delete Product</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+
+          <View style={styles.lastUpdateContainer}>
+            <Text style={styles.lastUpdateText}>
+              Last updated: {selectedProduct.lastUpdate}
+            </Text>
+          </View>
+        </ScrollView>
+
+        <BottomNavigation activeScreen="products" />
+      </SafeAreaView>
+    );
+  };
+
+  const AddProductScreen = () => {
+    if (user?.role !== 'admin') {
+      navigateToScreen('products');
+      showAlert('Access Denied', 'Only admins can add products.');
+      return null;
+    }
+
+    return (
+      <SafeAreaView style={styles.container}>
+        <StatusBar barStyle="dark-content" backgroundColor="#f8f9fa" />
+        <Header 
+          title="Add Product" 
+          showBack 
+          onBack={() => {
+            resetForm();
+            navigateToScreen('products');
+          }} 
+        />
+
+        <KeyboardAvoidingView 
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          style={styles.flex}
+        >
+          <ScrollView style={styles.formContainer}>
+            <CustomTextInput
+              label="Name"
+              value={formData.name}
+              onChangeText={(text: string) => setFormData(prev => ({ ...prev, name: text }))}
+              placeholder="Enter product name"
+              required
+              autoFocus
+              refKey="name"
+              onSubmitEditing={() => focusField('description')}
+            />
+
+            <CustomTextInput
+              label="Description"
+              value={formData.description}
+              onChangeText={(text: string) => setFormData(prev => ({ ...prev, description: text }))}
+              placeholder="Enter description"
+              multiline
+              refKey="description"
+            />
+
+            <CustomTextInput
+              label="Price"
+              value={formData.price}
+              onChangeText={(text: string) => setFormData(prev => ({ ...prev, price: text }))}
+              placeholder="Enter price"
+              keyboardType="numeric"
+              required
+              refKey="price"
+              onSubmitEditing={() => focusField('stock')}
+            />
+
+            <CustomTextInput
+              label="Stock"
+              value={formData.stock}
+              onChangeText={(text: string) => setFormData(prev => ({ ...prev, stock: text }))}
+              placeholder="Enter stock quantity"
+              keyboardType="numeric"
+              refKey="stock"
+              onSubmitEditing={() => focusField('category')}
+            />
+
+            <CustomTextInput
+              label="Category"
+              value={formData.category}
+              onChangeText={(text: string) => setFormData(prev => ({ ...prev, category: text }))}
+              placeholder="Enter category"
+              refKey="category"
+              onSubmitEditing={() => focusField('brand')}
+            />
+
+            <CustomTextInput
+              label="Brand"
+              value={formData.brand}
+              onChangeText={(text: string) => setFormData(prev => ({ ...prev, brand: text }))}
+              placeholder="Enter brand"
+              refKey="brand"
+              onSubmitEditing={() => focusField('location')}
+            />
+
+            <CustomTextInput
+              label="Location"
+              value={formData.location}
+              onChangeText={(text: string) => setFormData(prev => ({ ...prev, location: text }))}
+              placeholder="Enter location"
+              refKey="location"
+              onSubmitEditing={() => focusField('sizes')}
+            />
+
+            <CustomTextInput
+              label="Sizes"
+              value={formData.sizes}
+              onChangeText={(text: string) => setFormData(prev => ({ ...prev, sizes: text }))}
+              placeholder="Enter sizes (e.g., S,M,L)"
+              refKey="sizes"
+              onSubmitEditing={() => focusField('productCode')}
+            />
+
+            <CustomTextInput
+              label="Product Code"
+              value={formData.productCode}
+              onChangeText={(text: string) => setFormData(prev => ({ ...prev, productCode: text }))}
+              placeholder="Enter product code"
+              refKey="productCode"
+              onSubmitEditing={() => focusField('orderName')}
+            />
+
+            <CustomTextInput
+              label="Order Name"
+              value={formData.orderName}
+              onChangeText={(text: string) => setFormData(prev => ({ ...prev, orderName: text }))}
+              placeholder="Enter order name"
+              refKey="orderName"
+              onSubmitEditing={() => focusField('image')}
+            />
+
+            <CustomTextInput
+              label="Image URL"
+              value={formData.image}
+              onChangeText={(text: string) => setFormData(prev => ({ ...prev, image: text }))}
+              placeholder="Enter image URL"
+              refKey="image"
+              returnKeyType="done"
+            />
+
+            <StatusSelector />
+
+            <ErrorMessage />
+            <LoadingIndicator />
+
+            <View style={styles.formActions}>
+              <TouchableOpacity
+                style={styles.cancelButton}
+                onPress={() => {
+                  resetForm();
+                  navigateToScreen('products');
+                }}
+              >
+                <Text style={styles.cancelButtonText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.submitButton, loading && styles.disabledButton]}
+                onPress={handleAddProduct}
+                disabled={loading}
+              >
+                <Text style={styles.submitButtonText}>Add Product</Text>
+              </TouchableOpacity>
+            </View>
+          </ScrollView>
+        </KeyboardAvoidingView>
+      </SafeAreaView>
+    );
+  };
+
+  const EditProductScreen = () => {
+    if (user?.role !== 'admin' || !selectedProduct) {
+      navigateToScreen('products');
+      showAlert('Access Denied', 'Only admins can edit products.');
+      return null;
+    }
+
+    return (
+      <SafeAreaView style={styles.container}>
+        <StatusBar barStyle="dark-content" backgroundColor="#f8f9fa" />
+        <Header 
+          title="Edit Product" 
+          showBack 
+          onBack={() => navigateToScreen('product-detail')} 
+        />
+
+        <KeyboardAvoidingView 
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          style={styles.flex}
+        >
+          <ScrollView style={styles.formContainer}>
+            <CustomTextInput
+              label="Name"
+              value={formData.name}
+              onChangeText={(text: string) => setFormData(prev => ({ ...prev, name: text }))}
+              placeholder="Enter product name"
+              required
+              refKey="editName"
+              onSubmitEditing={() => focusField('editDescription')}
+            />
+
+            <CustomTextInput
+              label="Description"
+              value={formData.description}
+              onChangeText={(text: string) => setFormData(prev => ({ ...prev, description: text }))}
+              placeholder="Enter description"
+              multiline
+              refKey="editDescription"
+            />
+
+            <CustomTextInput
+              label="Price"
+              value={formData.price}
+              onChangeText={(text: string) => setFormData(prev => ({ ...prev, price: text }))}
+              placeholder="Enter price"
+              keyboardType="numeric"
+              required
+              refKey="editPrice"
+              onSubmitEditing={() => focusField('editStock')}
+            />
+
+            <CustomTextInput
+              label="Stock"
+              value={formData.stock}
+              onChangeText={(text: string) => setFormData(prev => ({ ...prev, stock: text }))}
+              placeholder="Enter stock quantity"
+              keyboardType="numeric"
+              refKey="editStock"
+              onSubmitEditing={() => focusField('editCategory')}
+            />
+
+            <CustomTextInput
+              label="Category"
+              value={formData.category}
+              onChangeText={(text: string) => setFormData(prev => ({ ...prev, category: text }))}
+              placeholder="Enter category"
+              refKey="editCategory"
+              onSubmitEditing={() => focusField('editBrand')}
+            />
+
+            <CustomTextInput
+              label="Brand"
+              value={formData.brand}
+              onChangeText={(text: string) => setFormData(prev => ({ ...prev, brand: text }))}
+              placeholder="Enter brand"
+              refKey="editBrand"
+              onSubmitEditing={() => focusField('editLocation')}
+            />
+
+            <CustomTextInput
+              label="Location"
+              value={formData.location}
+              onChangeText={(text: string) => setFormData(prev => ({ ...prev, location: text }))}
+              placeholder="Enter location"
+              refKey="editLocation"
+              onSubmitEditing={() => focusField('editSizes')}
+            />
+
+            <CustomTextInput
+              label="Sizes"
+              value={formData.sizes}
+              onChangeText={(text: string) => setFormData(prev => ({ ...prev, sizes: text }))}
+              placeholder="Enter sizes (e.g., S,M,L)"
+              refKey="editSizes"
+              onSubmitEditing={() => focusField('editProductCode')}
+            />
+
+            <CustomTextInput
+              label="Product Code"
+              value={formData.productCode}
+              onChangeText={(text: string) => setFormData(prev => ({ ...prev, productCode: text }))}
+              placeholder="Enter product code"
+              refKey="editProductCode"
+              onSubmitEditing={() => focusField('editOrderName')}
+            />
+
+            <CustomTextInput
+              label="Order Name"
+              value={formData.orderName}
+              onChangeText={(text: string) => setFormData(prev => ({ ...prev, orderName: text }))}
+              placeholder="Enter order name"
+              refKey="editOrderName"
+              onSubmitEditing={() => focusField('editImage')}
+            />
+
+            <CustomTextInput
+              label="Image URL"
+              value={formData.image}
+              onChangeText={(text: string) => setFormData(prev => ({ ...prev, image: text }))}
+              placeholder="Enter image URL"
+              refKey="editImage"
+              returnKeyType="done"
+            />
+
+            <StatusSelector />
+
+            <ErrorMessage />
+            <LoadingIndicator />
+
+            <View style={styles.formActions}>
+              <TouchableOpacity
+                style={styles.cancelButton}
+                onPress={() => navigateToScreen('product-detail')}
+              >
+                <Text style={styles.cancelButtonText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.submitButton, loading && styles.disabledButton]}
+                onPress={handleUpdateProduct}
+                disabled={loading}
+              >
+                <Text style={styles.submitButtonText}>Update Product</Text>
+              </TouchableOpacity>
+            </View>
+          </ScrollView>
+        </KeyboardAvoidingView>
+      </SafeAreaView>
+    );
+  };
+
+  const CategoriesScreen = () => {
+    const categories = Array.from(new Set(products.map(p => p.category)))
+      .filter(Boolean)
+      .map(category => ({
+        id: category!,
+        name: category!,
+        count: products.filter(p => p.category === category).length,
+        icon: getCategoryIcon(category!),
+      }));
+
+    const filteredCategories = categories.filter(category =>
+      category.name.toLowerCase().includes(searchQuery.toLowerCase())
+    );
+
+    return (
+      <SafeAreaView style={styles.container}>
+        <StatusBar barStyle="dark-content" backgroundColor="#f8f9fa" />
+        <Header title="Categories" />
+        <SearchBar placeholder="Search categories..." />
+
+        {searchQuery.length > 0 && (
+          <View style={styles.searchResultsInfo}>
+            <Text style={styles.searchResultsText}>
+              {filteredCategories.length} {filteredCategories.length === 1 ? 'result' : 'results'} found
+            </Text>
+            <TouchableOpacity onPress={() => setSearchQuery('')}>
+              <Text style={styles.clearSearchLink}>Clear search</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
+        <ScrollView style={styles.categoriesContainer}>
+          <LoadingIndicator />
+          <ErrorMessage />
+          
+          {!loading && !error && (
+            <>
+              {filteredCategories.length === 0 ? (
+                <View style={styles.emptyState}>
+                  <Text style={styles.emptyStateTitle}>
+                    {searchQuery ? 'No categories found' : 'No categories available'}
+                  </Text>
+                  <Text style={styles.emptyStateSubtitle}>
+                    {searchQuery ? 'Try a different search term' : 'Add products to see categories'}
+                  </Text>
+                  {searchQuery && (
+                    <TouchableOpacity
+                      style={styles.emptyStateButton}
+                      onPress={() => setSearchQuery('')}
+                    >
+                      <Text style={styles.emptyStateButtonText}>Clear Search</Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
+              ) : (
+                filteredCategories.map(category => (
+                  <TouchableOpacity
+                    key={category.id}
+                    style={styles.categoryListCard}
+                    onPress={() => {
+                      setSearchQuery(category.name);
+                      navigateToScreen('products');
+                    }}
+                  >
+                    <View style={styles.categoryIconContainer}>
+                      <Text style={styles.categoryIconText}>{category.icon}</Text>
+                    </View>
+                    <View style={styles.categoryInfo}>
+                      <Text style={styles.categoryNameText}>{category.name}</Text>
+                      <Text style={styles.categoryCountText}>
+                        {category.count} {category.count === 1 ? 'item' : 'items'}
+                      </Text>
+                    </View>
+                    <Text style={styles.categoryArrow}>›</Text>
+                  </TouchableOpacity>
+                ))
+              )}
+            </>
+          )}
+        </ScrollView>
+
+        <BottomNavigation activeScreen="categories" />
+      </SafeAreaView>
+    );
+  };
+
+  // Helper function for category icons
+  const getCategoryIcon = (category: string): string => {
+    const iconMap: { [key: string]: string } = {
+      bottoms: '👖',
+      coats: '🧥',
+      jeans: '👖',
+      tops: '👕',
+      shirts: '👔',
+      accessories: '👜',
+      shoes: '👟',
+      electronics: '📱',
+      home: '🏠',
+      books: '📚',
+      sports: '⚽',
+      toys: '🧸',
+      beauty: '💄',
+      food: '🍎',
+    };
+    return iconMap[category.toLowerCase()] || '📦';
+  };
+
+  // Main render
+  const renderCurrentScreen = () => {
+    switch (currentScreen) {
+      case 'login': return <LoginScreen />;
+      case 'register': return <RegisterScreen />;
+      case 'dashboard': return <DashboardScreen />;
+      case 'products': return <ProductsScreen />;
+      case 'product-detail': return <ProductDetailScreen />;
+      case 'categories': return <CategoriesScreen />;
+      case 'add-product': return <AddProductScreen />;
+      case 'edit-product': return <EditProductScreen />;
+      default: return <LoginScreen />;
+    }
+  };
+
   return (
     <>
-      {currentScreen === 'login' && <LoginScreen />}
-      {currentScreen === 'register' && <RegisterScreen />}
-      {currentScreen === 'dashboard' && <DashboardScreen />}
-      {currentScreen === 'products' && <ProductsScreen />}
-      {currentScreen === 'product-detail' && <ProductDetailScreen />}
-      {currentScreen === 'categories' && <CategoriesScreen />}
+      {renderCurrentScreen()}
       <SideMenu />
     </>
   );
 };
 
-// Enhanced Styles with cloud connection indicator
+// Styles
 const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#f8f9fa',
   },
+  flex: {
+    flex: 1,
+  },
+  keyboardAvoidingView: {
+    flex: 1,
+  },
+  scrollContent: {
+    flexGrow: 1,
+    justifyContent: 'center',
+    paddingVertical: 20,
+  },
+  
+  // Login/Register Styles
   loginContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    padding: 20,
+    paddingHorizontal: 20,
   },
   loginContent: {
     width: '100%',
     maxWidth: 400,
+    backgroundColor: 'rgba(255, 255, 255, 0.1)',
     padding: 30,
+    borderRadius: 16,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.3,
+    shadowRadius: 16,
+    elevation: 8,
   },
   loginTitle: {
     fontSize: 32,
-    fontWeight: 'bold',
-    color: 'white',
+    fontWeight: '800',
+    color: '#fff',
     textAlign: 'center',
-    marginBottom: 10,
+    marginBottom: 8,
   },
   loginSubtitle: {
     fontSize: 16,
     color: 'rgba(255, 255, 255, 0.8)',
     textAlign: 'center',
-    marginBottom: 40,
+    marginBottom: 32,
+    lineHeight: 22,
   },
+  
+  // Input Styles
   inputContainer: {
     marginBottom: 20,
   },
   inputLabel: {
-    color: 'white',
-    fontSize: 16,
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#374151',
     marginBottom: 8,
-    fontWeight: '500',
+  },
+  required: {
+    color: '#ef4444',
   },
   input: {
-    backgroundColor: 'rgba(255, 255, 255, 0.9)',
-    borderRadius: 8,
-    padding: 15,
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
     fontSize: 16,
-    color: '#333',
-  },
-  loginButton: {
-    backgroundColor: 'rgba(255, 255, 255, 0.2)',
-    borderRadius: 8,
-    padding: 15,
-    marginTop: 20,
-    alignItems: 'center',
+    color: '#374151',
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.3)',
+    borderColor: '#e5e7eb',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 2,
+    elevation: 1,
+  },
+  inputFocused: {
+    borderColor: '#8B5CF6',
+    borderWidth: 2,
+    shadowColor: '#8B5CF6',
+    shadowOpacity: 0.1,
+  },
+  multilineInput: {
+    minHeight: 80,
+    textAlignVertical: 'top',
+  },
+  
+  // Button Styles
+  loginButton: {
+    backgroundColor: '#22c55e',
+    paddingVertical: 16,
+    borderRadius: 12,
+    alignItems: 'center',
+    marginTop: 8,
+    shadowColor: '#22c55e',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 4,
   },
   disabledButton: {
-    opacity: 0.6,
+    backgroundColor: '#9ca3af',
+    shadowOpacity: 0,
+    elevation: 0,
   },
   loginButtonText: {
-    color: 'white',
-    fontSize: 18,
-    fontWeight: '600',
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '700',
   },
   switchScreenButton: {
     marginTop: 20,
     alignItems: 'center',
+    paddingVertical: 8,
   },
   switchScreenText: {
-    color: 'rgba(255, 255, 255, 0.8)',
-    fontSize: 16,
-    textDecorationLine: 'underline',
-  },
-  loadingText: {
     color: 'rgba(255, 255, 255, 0.9)',
-    textAlign: 'center',
-    fontSize: 16,
-    marginVertical: 10,
-  },
-  errorText: {
-    color: '#ff6b6b',
     fontSize: 14,
-    textAlign: 'center',
-    backgroundColor: 'rgba(255, 107, 107, 0.1)',
-    padding: 10,
-    borderRadius: 8,
-    marginVertical: 10,
+    fontWeight: '500',
   },
-  userInfo: {
-    backgroundColor: 'rgba(255, 255, 255, 0.1)',
-    borderRadius: 8,
-    padding: 15,
-    marginBottom: 20,
-  },
-  userInfoText: {
-    color: 'white',
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  userRoleText: {
-    color: 'rgba(255, 255, 255, 0.8)',
-    fontSize: 14,
-    textTransform: 'capitalize',
-  },
-  connectionStatus: {
-    backgroundColor: 'white',
-    borderRadius: 8,
-    padding: 12,
-    marginBottom: 20,
+  
+  // Header Styles
+  header: {
+    flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
+    paddingVertical: 16,
+    backgroundColor: '#fff',
+    borderBottomWidth: 1,
+    borderBottomColor: '#e5e7eb',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.1,
+    shadowOpacity: 0.05,
     shadowRadius: 2,
     elevation: 2,
   },
-  connectionText: {
-    fontSize: 14,
-    fontWeight: '500',
-  },
-  header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: 20,
-    paddingVertical: 15,
-    backgroundColor: 'white',
-    borderBottomWidth: 1,
-    borderBottomColor: '#e9ecef',
-  },
   menuButton: {
-    width: 30,
-    height: 30,
-    justifyContent: 'center',
-    alignItems: 'center',
+    padding: 8,
+    borderRadius: 8,
   },
   menuIcon: {
-    fontSize: 18,
-    color: '#333',
+    fontSize: 24,
+    color: '#374151',
+    fontWeight: '600',
   },
   headerTitle: {
     fontSize: 20,
-    fontWeight: '600',
-    color: '#8B5CF6',
+    fontWeight: '700',
+    color: '#111827',
   },
   profileButton: {
-    width: 30,
-    height: 30,
-    backgroundColor: '#8B5CF6',
-    borderRadius: 15,
-    justifyContent: 'center',
-    alignItems: 'center',
+    padding: 8,
+    borderRadius: 8,
   },
   profileIcon: {
-    fontSize: 16,
-    color: 'white',
-  },
-  dashboardContent: {
-    flex: 1,
-    padding: 20,
-  },
-  section: {
-    marginBottom: 30,
-  },
-  sectionTitle: {
-    fontSize: 20,
-    fontWeight: '600',
-    color: '#333',
-    marginBottom: 15,
-  },
-  activityGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    justifyContent: 'space-between',
-  },
-  activityCard: {
-    backgroundColor: 'white',
-    borderRadius: 12,
-    padding: 15,
-    width: '48%',
-    marginBottom: 10,
-    alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
-  },
-  activityValue: {
     fontSize: 24,
-    fontWeight: 'bold',
-    color: '#8B5CF6',
-    marginBottom: 5,
+    color: '#6b7280',
   },
-  activityLabel: {
-    fontSize: 12,
-    color: '#666',
-    textAlign: 'center',
-  },
-  chartContainer: {
-    backgroundColor: 'white',
-    borderRadius: 12,
-    padding: 20,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
-  },
-  chartBars: {
-    flexDirection: 'row',
-    justifyContent: 'space-around',
-    alignItems: 'flex-end',
-    height: 120,
-  },
-  barContainer: {
-    alignItems: 'center',
-  },
-  bar: {
-    width: 20,
-    borderRadius: 10,
-    marginBottom: 10,
-    minHeight: 10,
-  },
-  barLabel: {
-    fontSize: 12,
-    color: '#666',
-    textAlign: 'center',
-    marginBottom: 4,
-  },
-  barValue: {
-    fontSize: 10,
-    color: '#999',
-    textAlign: 'center',
-  },
-  categoryIconsGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    justifyContent: 'space-between',
-    marginBottom: 10,
-  },
-  categoryIconCard: {
-    width: '30%',
-    aspectRatio: 1,
-    backgroundColor: '#E0D1FF',
-    borderRadius: 12,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginBottom: 10,
-  },
-  categoryIcon: {
-    fontSize: 24,
-  },
-  categoryName2: {
-    fontSize: 10,
-    color: '#666',
-    textAlign: 'center',
-    marginTop: 5,
-  },
-  viewMoreLink: {
-    alignItems: 'flex-end',
-    marginTop: 5,
-  },
-  viewMoreLinkText: {
-    color: '#8B5CF6',
-    fontSize: 14,
-  },
-  categoryStatsCard: {
-    backgroundColor: 'white',
-    borderRadius: 12,
-    padding: 15,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
-  },
-  categoryStatRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: 10,
-    borderBottomWidth: 1,
-    borderBottomColor: '#f0f0f0',
-  },
-  categoryStatLabel: {
-    fontSize: 14,
-    color: '#333',
-  },
-  categoryStatValue: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  categoryStatNumber: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#8B5CF6',
-    marginRight: 5,
-  },
-  categoryStatIcon: {
-    fontSize: 16,
-  },
-  storesListCard: {
-    backgroundColor: 'white',
-    borderRadius: 12,
-    padding: 15,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
-  },
-  storeItem: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: '#f0f0f0',
-  },
-  storeLocation: {
-    fontSize: 14,
-    color: '#333',
-  },
-  storeArrow: {
-    fontSize: 18,
-    color: '#8B5CF6',
-  },
+  
+  // Search Styles
   searchContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
     paddingHorizontal: 20,
-    paddingVertical: 15,
-    backgroundColor: 'white',
+    paddingVertical: 12,
+    backgroundColor: '#fff',
     borderBottomWidth: 1,
-    borderBottomColor: '#e9ecef',
+    borderBottomColor: '#e5e7eb',
   },
   searchBar: {
-    flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#f8f9fa',
-    borderRadius: 8,
-    paddingHorizontal: 10,
-    marginRight: 10,
+    backgroundColor: '#f3f4f6',
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    height: 48,
   },
   searchIcon: {
-    fontSize: 16,
-    color: '#999',
-    marginRight: 10,
+    fontSize: 20,
+    color: '#6b7280',
+    marginRight: 12,
   },
   searchInput: {
     flex: 1,
-    paddingVertical: 10,
     fontSize: 16,
-    color: '#333',
+    color: '#374151',
   },
-  addButton: {
-    backgroundColor: '#8B5CF6',
-    borderRadius: 8,
-    paddingHorizontal: 15,
-    paddingVertical: 10,
-    marginRight: 10,
+  clearSearchButton: {
+    padding: 8,
+    marginLeft: 8,
   },
-  addButtonText: {
-    color: 'white',
-    fontSize: 14,
-    fontWeight: '600',
+  clearSearchText: {
+    fontSize: 18,
+    color: '#6b7280',
   },
-  filterButton: {
-    paddingHorizontal: 10,
-    paddingVertical: 10,
-  },
-  filterText: {
-    color: '#8B5CF6',
-    fontSize: 14,
-    fontWeight: '500',
-  },
-  productsList: {
-    flex: 1,
-    padding: 20,
-  },
-  productCard: {
-    backgroundColor: 'white',
-    borderRadius: 12,
-    padding: 15,
-    marginBottom: 15,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
-  },
-  productImage: {
-    width: 60,
-    height: 60,
-    borderRadius: 8,
-    marginBottom: 10,
-  },
-  productInfo: {
+  searchResultsInfo: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 10,
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    backgroundColor: '#f9fafb',
   },
-  productDetails: {
-    flex: 1,
-  },
-  stockText: {
+  searchResultsText: {
     fontSize: 14,
-    color: '#666',
-    marginBottom: 2,
-  },
-  categoryText: {
-    fontSize: 14,
-    color: '#666',
-    marginBottom: 2,
-  },
-  locationText: {
-    fontSize: 14,
-    color: '#666',
-    marginBottom: 2,
-  },
-  brandText: {
-    fontSize: 14,
-    color: '#666',
-  },
-  productActions: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  statusButton: {
-    backgroundColor: '#8B5CF6',
-    borderRadius: 15,
-    paddingHorizontal: 15,
-    paddingVertical: 5,
-    marginRight: 10,
-  },
-  statusText: {
-    color: 'white',
-    fontSize: 12,
+    color: '#6b7280',
     fontWeight: '500',
   },
-  moreButton: {
-    width: 30,
-    height: 30,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  moreIcon: {
-    fontSize: 20,
+  clearSearchLink: {
+    fontSize: 14,
     color: '#8B5CF6',
-  },
-  productName: {
-    fontSize: 16,
     fontWeight: '600',
-    color: '#333',
   },
-  bottomNav: {
-    flexDirection: 'row',
-    backgroundColor: 'white',
-    paddingVertical: 10,
-    borderTopWidth: 1,
-    borderTopColor: '#e9ecef',
-  },
-  navItem: {
-    flex: 1,
+  
+  // Loading and Error Styles
+  loadingContainer: {
     alignItems: 'center',
-    paddingVertical: 5,
+    paddingVertical: 20,
   },
-  navIcon: {
-    fontSize: 20,
-    marginBottom: 4,
+  loadingText: {
+    fontSize: 14,
+    color: '#8B5CF6',
+    marginTop: 8,
+    fontWeight: '500',
   },
-  navText: {
-    fontSize: 12,
-    color: '#666',
+  errorContainer: {
+    backgroundColor: '#fef2f2',
+    borderRadius: 8,
+    padding: 12,
+    marginVertical: 8,
+    marginHorizontal: 20,
   },
+  errorText: {
+    fontSize: 14,
+    color: '#dc2626',
+    textAlign: 'center',
+    fontWeight: '500',
+  },
+  
+  // Side Menu Styles
   sideMenuOverlay: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
     zIndex: 1000,
   },
   sideMenuBackdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    ...StyleSheet.absoluteFillObject,
   },
   sideMenuContainer: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    bottom: 0,
-    width: '80%',
+    width: '75%',
     maxWidth: 300,
+    height: '100%',
+    shadowColor: '#000',
+    shadowOffset: { width: 2, height: 0 },
+    shadowOpacity: 0.25,
+    shadowRadius: 8,
+    elevation: 8,
   },
   sideMenuContent: {
     flex: 1,
     paddingTop: 50,
     paddingHorizontal: 20,
+    paddingBottom: 20,
   },
   sideMenuHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 20,
+    marginBottom: 30,
   },
   closeButton: {
-    marginRight: 20,
+    padding: 8,
+    borderRadius: 8,
   },
   closeIcon: {
-    fontSize: 20,
-    color: 'white',
+    fontSize: 24,
+    color: '#fff',
+    fontWeight: '600',
   },
   sideMenuTitle: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    color: 'white',
+    fontSize: 24,
+    fontWeight: '800',
+    color: '#fff',
+    flex: 1,
+    textAlign: 'center',
+    marginRight: 32,
+  },
+  userInfo: {
+    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 24,
+  },
+  userInfoText: {
+    fontSize: 18,
+    color: '#fff',
+    fontWeight: '700',
+    marginBottom: 4,
+  },
+  userRoleText: {
+    fontSize: 14,
+    color: 'rgba(255, 255, 255, 0.8)',
+    fontWeight: '500',
+    textTransform: 'capitalize',
   },
   sideMenuItems: {
     flex: 1,
   },
   sideMenuItem: {
-    paddingVertical: 15,
-    borderBottomWidth: 1,
-    borderBottomColor: 'rgba(255, 255, 255, 0.1)',
+    paddingVertical: 16,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    marginBottom: 4,
   },
   sideMenuItemText: {
-    fontSize: 18,
-    color: 'white',
-    fontWeight: '500',
+    fontSize: 16,
+    color: '#fff',
+    fontWeight: '600',
   },
   logoutButton: {
-    paddingVertical: 20,
+    backgroundColor: '#dc2626',
+    paddingVertical: 16,
+    borderRadius: 12,
     alignItems: 'center',
-    marginBottom: 40,
+    shadowColor: '#dc2626',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 4,
   },
   logoutText: {
-    fontSize: 18,
-    color: 'white',
-    fontWeight: '500',
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '700',
   },
+  
+  // Dashboard Styles
+  dashboardContent: {
+    flex: 1,
+    padding: 20,
+  },
+  connectionStatus: {
+    alignItems: 'center',
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 24,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  connectionText: {
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  section: {
+    marginBottom: 24,
+  },
+  sectionTitle: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: '#111827',
+    marginBottom: 16,
+  },
+  statsGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'space-between',
+  },
+  statCard: {
+    width: '48%',
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    padding: 20,
+    marginBottom: 12,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 2,
+    alignItems: 'center',
+  },
+  statValue: {
+    fontSize: 28,
+    fontWeight: '800',
+    marginBottom: 4,
+  },
+  statLabel: {
+    fontSize: 12,
+    color: '#6b7280',
+    fontWeight: '600',
+    textAlign: 'center',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  categoryGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'space-between',
+  },
+  categoryCard: {
+    width: '30%',
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 12,
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  categoryIcon: {
+    fontSize: 32,
+    marginBottom: 8,
+  },
+  categoryName: {
+    fontSize: 12,
+    color: '#374151',
+    fontWeight: '600',
+    textAlign: 'center',
+    textTransform: 'capitalize',
+  },
+  viewAllButton: {
+    backgroundColor: '#8B5CF6',
+    borderRadius: 12,
+    paddingVertical: 16,
+    alignItems: 'center',
+    marginTop: 8,
+  },
+  viewAllText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  
+  // Product Styles
+  productsContainer: {
+    flex: 1,
+    paddingHorizontal: 20,
+    paddingTop: 12,
+  },
+  productCard: {
+    flexDirection: 'row',
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 12,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  productImage: {
+    width: 80,
+    height: 80,
+    borderRadius: 8,
+    marginRight: 16,
+    backgroundColor: '#f3f4f6',
+  },
+  productInfo: {
+    flex: 1,
+    justifyContent: 'space-between',
+  },
+  productName: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#111827',
+    marginBottom: 4,
+  },
+  productCategory: {
+    fontSize: 14,
+    color: '#6b7280',
+    fontWeight: '500',
+    textTransform: 'capitalize',
+    marginBottom: 8,
+  },
+  productDetails: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  productPrice: {
+    fontSize: 16,
+    color: '#059669',
+    fontWeight: '700',
+  },
+  productStock: {
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  productFooter: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  productStatus: {
+    fontSize: 12,
+    fontWeight: '600',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  productBrand: {
+    fontSize: 12,
+    color: '#6b7280',
+    fontWeight: '500',
+    fontStyle: 'italic',
+  },
+  
+  // Product Detail Styles
   productDetailContainer: {
     flex: 1,
     padding: 20,
   },
   productDetailImageContainer: {
     alignItems: 'center',
-    marginBottom: 20,
+    marginBottom: 24,
   },
   productDetailImage: {
     width: 200,
     height: 200,
     borderRadius: 16,
+    backgroundColor: '#f3f4f6',
+  },
+  productDetailInfo: {
+    alignItems: 'center',
+    marginBottom: 24,
   },
   productDetailName: {
     fontSize: 24,
-    fontWeight: 'bold',
-    color: '#333',
+    fontWeight: '800',
+    color: '#111827',
     textAlign: 'center',
-    marginBottom: 5,
+    marginBottom: 8,
   },
   productDetailBrand: {
     fontSize: 16,
-    color: '#8B5CF6',
-    textAlign: 'center',
-    marginBottom: 20,
-  },
-  productDetailSizes: {
-    fontSize: 16,
-    color: '#8B5CF6',
-    textAlign: 'center',
-    marginBottom: 5,
+    color: '#6b7280',
+    fontWeight: '600',
+    marginBottom: 4,
   },
   productDetailCategory: {
-    fontSize: 16,
-    color: '#8B5CF6',
-    textAlign: 'center',
-    marginBottom: 20,
+    fontSize: 14,
+    color: '#8b5cf6',
+    fontWeight: '600',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
   },
-  productDetailCard: {
-    backgroundColor: 'white',
+  detailCard: {
+    backgroundColor: '#fff',
     borderRadius: 16,
     padding: 20,
-    borderWidth: 2,
-    borderColor: '#8B5CF6',
+    marginBottom: 16,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.1,
-    shadowRadius: 4,
+    shadowRadius: 8,
     elevation: 3,
   },
-  productDetailInfo: {
-    marginBottom: 20,
-  },
-  productDetailLabel: {
-    fontSize: 14,
-    color: '#666',
-    marginBottom: 5,
-  },
-  qrCodeContainer: {
-    alignItems: 'center',
-    marginBottom: 20,
-  },
-  qrCodePlaceholder: {
-    width: 80,
-    height: 80,
-    backgroundColor: '#000',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  qrCodeText: {
-    color: 'white',
-    fontSize: 12,
-    fontWeight: 'bold',
-  },
-  storeAvailabilityTitle: {
-    fontSize: 14,
-    color: '#666',
-    marginBottom: 10,
-  },
-  storeAvailabilityItem: {
+  detailRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingVertical: 5,
+    paddingVertical: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f3f4f6',
   },
-  storeLocation: {
+  detailLabel: {
     fontSize: 14,
-    color: '#333',
+    color: '#6b7280',
+    fontWeight: '600',
   },
-  storeStatus: {
+  detailValue: {
+    fontSize: 14,
+    color: '#111827',
+    fontWeight: '700',
+  },
+  descriptionText: {
     fontSize: 16,
-    fontWeight: 'bold',
+    color: '#374151',
+    lineHeight: 24,
+    marginTop: 8,
   },
-  lastUpdate: {
+  actionButtons: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 16,
+  },
+  actionButton: {
+    flex: 1,
+    paddingVertical: 14,
+    borderRadius: 12,
+    alignItems: 'center',
+    marginHorizontal: 6,
+  },
+  editButton: {
+    backgroundColor: '#8b5cf6',
+  },
+  deleteButton: {
+    backgroundColor: '#dc2626',
+  },
+  actionButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  lastUpdateContainer: {
+    alignItems: 'center',
+    paddingVertical: 16,
+  },
+  lastUpdateText: {
     fontSize: 12,
-    color: '#999',
-    textAlign: 'center',
-    marginTop: 15,
+    color: '#6b7280',
+    fontStyle: 'italic',
   },
-  categoriesContainer: {
+  
+  // Form Styles
+  formContainer: {
     flex: 1,
     padding: 20,
   },
-  categoryCard: {
+  statusButtons: {
+    flexDirection: 'row',
+    marginTop: 8,
+  },
+  statusButton: {
+    flex: 1,
+    paddingVertical: 12,
+    borderRadius: 8,
+    alignItems: 'center',
+    backgroundColor: '#f3f4f6',
+    marginHorizontal: 4,
+    borderWidth: 2,
+    borderColor: 'transparent',
+  },
+  statusButtonActive: {
+    backgroundColor: '#dcfce7',
+    borderColor: '#22c55e',
+  },
+  statusButtonInactive: {
+    backgroundColor: '#fef2f2',
+    borderColor: '#ef4444',
+  },
+  statusText: {
+    fontSize: 14,
+    color: '#6b7280',
+    fontWeight: '600',
+  },
+  statusTextActive: {
+    color: '#fff',
+  },
+  formActions: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 24,
+    marginBottom: 20,
+  },
+  cancelButton: {
+    flex: 1,
+    paddingVertical: 16,
+    borderRadius: 12,
+    alignItems: 'center',
+    backgroundColor: '#f3f4f6',
+    marginRight: 8,
+  },
+  cancelButtonText: {
+    color: '#6b7280',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  submitButton: {
+    flex: 1,
+    paddingVertical: 16,
+    borderRadius: 12,
+    alignItems: 'center',
+    backgroundColor: '#22c55e',
+    marginLeft: 8,
+  },
+  submitButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  
+  // Categories Styles
+  categoriesContainer: {
+    flex: 1,
+    paddingHorizontal: 20,
+    paddingTop: 12,
+  },
+  categoryListCard: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: 'white',
+    backgroundColor: '#fff',
     borderRadius: 12,
-    padding: 20,
-    marginBottom: 15,
+    padding: 16,
+    marginBottom: 12,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.1,
     shadowRadius: 4,
-    elevation: 3,
+    elevation: 2,
   },
   categoryIconContainer: {
-    width: 60,
-    height: 60,
-    backgroundColor: '#E0D1FF',
-    borderRadius: 12,
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: '#f3f4f6',
     justifyContent: 'center',
     alignItems: 'center',
-    marginRight: 15,
+    marginRight: 16,
   },
   categoryIconText: {
     fontSize: 24,
@@ -1725,66 +2444,92 @@ const styles = StyleSheet.create({
   categoryInfo: {
     flex: 1,
   },
-  categoryName: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#333',
-    marginBottom: 5,
-  },
-  categoryCount: {
-    fontSize: 14,
-    color: '#666',
-  },
-  noResultsContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingVertical: 50,
-  },
-  noResultsText: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#666',
-    marginBottom: 5,
-  },
-  noResultsSubtext: {
-    fontSize: 14,
-    color: '#999',
-    textAlign: 'center',
-  },
-  clearSearchButton: {
-    padding: 5,
-    marginLeft: 5,
-  },
-  clearSearchText: {
+  categoryNameText: {
     fontSize: 16,
-    color: '#999',
+    fontWeight: '700',
+    color: '#111827',
+    textTransform: 'capitalize',
+    marginBottom: 4,
   },
-  searchResultsInfo: {
-    paddingHorizontal: 20,
-    paddingVertical: 10,
-    backgroundColor: '#f8f9fa',
-  },
-  searchResultsText: {
+  categoryCountText: {
     fontSize: 14,
-    color: '#666',
-  },
-  clearSearchLink: {
-    fontSize: 14,
-    color: '#8B5CF6',
-    marginTop: 5,
-  },
-  clearSearchButton2: {
-    backgroundColor: '#8B5CF6',
-    paddingHorizontal: 20,
-    paddingVertical: 10,
-    borderRadius: 8,
-    marginTop: 15,
-  },
-  clearSearchButtonText: {
-    color: 'white',
-    fontSize: 14,
+    color: '#6b7280',
     fontWeight: '500',
+  },
+  categoryArrow: {
+    fontSize: 20,
+    color: '#6b7280',
+    fontWeight: '300',
+  },
+  
+  // Empty State Styles
+  emptyState: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 60,
+    paddingHorizontal: 20,
+  },
+  emptyStateTitle: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: '#111827',
+    textAlign: 'center',
+    marginBottom: 8,
+  },
+  emptyStateSubtitle: {
+    fontSize: 16,
+    color: '#6b7280',
+    textAlign: 'center',
+    marginBottom: 24,
+    lineHeight: 22,
+  },
+  emptyStateButton: {
+    backgroundColor: '#8b5cf6',
+    paddingVertical: 14,
+    paddingHorizontal: 24,
+    borderRadius: 12,
+  },
+  emptyStateButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  
+  // Bottom Navigation Styles
+  bottomNav: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    alignItems: 'center',
+    backgroundColor: '#fff',
+    paddingVertical: 12,
+    paddingHorizontal: 8,
+    borderTopWidth: 1,
+    borderTopColor: '#e5e7eb',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: -2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 8,
+  },
+  navItem: {
+    alignItems: 'center',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    minWidth: 60,
+  },
+  navIcon: {
+    fontSize: 24,
+    color: '#6b7280',
+    marginBottom: 4,
+  },
+  navText: {
+    fontSize: 12,
+    color: '#6b7280',
+    fontWeight: '600',
+  },
+  navTextActive: {
+    color: '#8b5cf6',
   },
 });
 
