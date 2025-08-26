@@ -55,10 +55,9 @@ app.get('/api', (req, res) => {
   res.status(200).json({ ok: true, service: 'myapi', version: '1.0.0' });
 });
 
-// Health check (เพิ่มตามที่ต้องการ)
+// Health check
 app.get('/api/ping', async (req, res) => {
   try {
-    // เช็ค DB แบบเร็ว ๆ; ลบสองบรรทัดนี้ได้ถ้าไม่อยากเช็ค DB
     await pool.query('SELECT 1');
     return res.status(200).json({
       ok: true,
@@ -139,7 +138,9 @@ app.post('/api/auth/login', async (req, res) => {
   }
 });
 
-// ---------- Products CRUD ----------
+// ---------- Products CRUD (Enhanced) ----------
+
+// GET /api/products (fetch all products)
 app.get('/api/products', authToken, async (req, res) => {
   try {
     const [rows] = await pool.query(
@@ -152,15 +153,44 @@ app.get('/api/products', authToken, async (req, res) => {
   }
 });
 
+// GET /api/products/:id (fetch single product)
+app.get('/api/products/:id', authToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const [rows] = await pool.query(
+      'SELECT * FROM products WHERE id = ?',
+      [id]
+    );
+    if (rows.length === 0) {
+      return res.status(404).json({ error: 'Product not found' });
+    }
+    return res.json(rows[0]);
+  } catch (e) {
+    console.error('Product Fetch Error:', e);
+    return res.status(500).json({ error: 'Failed to fetch product' });
+  }
+});
+
+// POST /api/products
 app.post('/api/products', authToken, async (req, res) => {
   try {
-    const { name, description, price } = req.body;
-    if (!name || price == null)
-      return res.status(400).json({ error: 'Missing name or price' });
+    const {
+      name, stock, category, location, image, status, brand, sizes, productCode, orderName
+    } = req.body;
+
+    if (!name) {
+      return res.status(400).json({ error: 'Name is required' });
+    }
 
     const [rs] = await pool.query(
-      'INSERT INTO products (name, description, price, lastUpdate) VALUES (?, ?, ?, NOW())',
-      [name, description || null, price]
+      `INSERT INTO products
+      (name, stock, category, location, image, status, brand, sizes, productCode, orderName, lastUpdate)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
+      [
+        name, stock || 0, category || null, location || null,
+        image || null, status || 'Active', brand || null, sizes || null, productCode || null,
+        orderName || null
+      ]
     );
     return res.status(201).json({ success: true, productId: rs.insertId });
   } catch (e) {
@@ -169,46 +199,68 @@ app.post('/api/products', authToken, async (req, res) => {
   }
 });
 
+// PUT /api/products/:id
 app.put('/api/products/:id', authToken, async (req, res) => {
+  console.log('Received body:', req.body);
   try {
     const { id } = req.params;
-    const { name, description, price } = req.body;
-    if (!name || price == null)
-      return res.status(400).json({ error: 'Missing name or price' });
+    const { name, stock, status, category, location, image, brand, sizes, productCode, orderName } = req.body;
+
+    if (!name) {
+      return res.status(400).json({ error: 'Name is required' });
+    }
 
     const [found] = await pool.query(
-      'SELECT product_id FROM products WHERE product_id = ?',
+      'SELECT id FROM products WHERE id = ?',
       [id]
     );
-    if (found.length === 0)
+    if (found.length === 0) {
       return res.status(404).json({ error: 'Product not found' });
+    }
 
     await pool.query(
-      'UPDATE products SET name = ?, description = ?, price = ?, lastUpdate = NOW() WHERE product_id = ?',
-      [name, description || null, price, id]
+      `UPDATE products SET name = ?, stock = ?, status = ?, category = ?, location = ?, image = ?, brand = ?, sizes = ?, productCode = ?, orderName = ?, lastUpdate = NOW() WHERE id = ?`,
+      [
+        name, stock || 0, status || 'Active', category || null, location || null,
+        image || null, brand || null, sizes || null, productCode || null, orderName || null, id
+      ]
     );
     return res.json({ success: true, productId: id });
   } catch (e) {
-    console.error('Update Product Error:', e);
-    return res.status(500).json({ error: 'Failed to update product' });
+    console.error('Update Product Error:', {
+      message: e.message,
+      stack: e.stack,
+      params: req.params,
+      body: req.body,
+      time: new Date().toISOString(),
+    });
+    return res.status(500).json({ error: 'Failed to update product', details: e.message });
   }
 });
 
+// DELETE /api/products/:id
 app.delete('/api/products/:id', authToken, async (req, res) => {
+  console.log('Delete request for id:', req.params.id);
   try {
     const { id } = req.params;
     const [found] = await pool.query(
-      'SELECT product_id FROM products WHERE product_id = ?',
+      'SELECT id FROM products WHERE id = ?',
       [id]
     );
-    if (found.length === 0)
+    if (found.length === 0) {
       return res.status(404).json({ error: 'Product not found' });
-
-    await pool.query('DELETE FROM products WHERE product_id = ?', [id]);
+    }
+    console.log('Attempting to delete product with id:', id);
+    await pool.query('DELETE FROM products WHERE id = ?', [id]);
     return res.json({ success: true, productId: id });
   } catch (e) {
-    console.error('Delete Product Error:', e);
-    return res.status(500).json({ error: 'Failed to delete product' });
+    console.error('Delete Product Error:', {
+      message: e.message,
+      stack: e.stack,
+      params: req.params,
+      time: new Date().toISOString(),
+    });
+    return res.status(500).json({ error: 'Failed to delete product', details: e.message });
   }
 });
 

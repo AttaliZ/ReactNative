@@ -101,13 +101,12 @@ const InventoryApp = () => {
   const [error, setError] = useState<string | null>(null);
   
   // Refs for TextInput focus management
-  const formRefs = useRef<{ [key: string]: TextInput | null }>({});
+  const inputRefs = useRef<{ [key: string]: TextInput | null }>({});
 
   // Helper Functions
   const resetForm = useCallback(() => {
     setFormData(EMPTY_FORM);
     setError(null);
-    // Don't clear refs when resetting form
   }, []);
 
   const showAlert = useCallback((title: string, message: string, onPress?: () => void) => {
@@ -127,6 +126,16 @@ const InventoryApp = () => {
     }
     
     return null;
+  }, []);
+
+  // Focus Management
+  const focusNextInput = useCallback((nextInputKey: string) => {
+    setTimeout(() => {
+      const nextInput = inputRefs.current[nextInputKey];
+      if (nextInput && typeof nextInput.focus === 'function') {
+        nextInput.focus();
+      }
+    }, 100);
   }, []);
 
   // API Functions
@@ -156,14 +165,15 @@ const InventoryApp = () => {
         let errorMessage = `HTTP error ${response.status}`;
         try {
           const errorData = await response.json();
-          errorMessage = errorData.error || errorMessage;
+          errorMessage = errorData.error || errorData.message || errorMessage;
         } catch {
           errorMessage = response.statusText || errorMessage;
         }
         throw new Error(errorMessage);
       }
 
-      return await response.json();
+      const data = await response.json();
+      return data;
     } catch (err: any) {
       if (err.name === 'AbortError') {
         throw new Error('Request timed out. Please check your internet connection.');
@@ -186,7 +196,7 @@ const InventoryApp = () => {
 
   // Authentication Functions
   const handleLogin = useCallback(async () => {
-    if (loading) return; // Prevent multiple calls
+    if (loading) return;
     
     try {
       setLoading(true);
@@ -226,7 +236,7 @@ const InventoryApp = () => {
   }, [username, password, loading, apiCall, testConnection, showAlert]);
 
   const handleRegister = useCallback(async () => {
-    if (loading) return; // Prevent multiple calls
+    if (loading) return;
     
     try {
       setLoading(true);
@@ -249,7 +259,7 @@ const InventoryApp = () => {
         }),
       });
 
-      if (response.success) {
+      if (response.success || response.message === 'User registered successfully') {
         showAlert('Success', 'Registration successful! Please login.');
         setCurrentScreen('login');
         setEmail('');
@@ -285,7 +295,6 @@ const InventoryApp = () => {
   const fetchProducts = useCallback(async () => {
     if (!authToken) {
       setError('Please log in to view products');
-      showAlert('Error', 'Please log in to view products');
       return;
     }
 
@@ -325,6 +334,7 @@ const InventoryApp = () => {
   }, [authToken, apiCall, showAlert, handleLogout]);
 
   const handleAddProduct = useCallback(async () => {
+    if (loading) return;
     try {
       setLoading(true);
       setError(null);
@@ -333,19 +343,10 @@ const InventoryApp = () => {
       if (validationError) throw new Error(validationError);
 
       const payload = {
-        name: formData.name.trim(),
-        description: formData.description.trim() || null,
+        ...formData,
         price: parseFloat(formData.price),
         stock: parseInt(formData.stock, 10) || 0,
-        category: formData.category.trim() || null,
-        location: formData.location.trim() || null,
-        image: formData.image.trim() || null,
-        status: formData.status,
-        brand: formData.brand.trim() || null,
-        sizes: formData.sizes.trim() || null,
-        productCode: formData.productCode.trim() || null,
-        orderName: formData.orderName.trim() || null,
-        storeAvailability: formData.storeAvailability || [],
+        storeAvailability: JSON.stringify(formData.storeAvailability || []),
       };
 
       const response = await apiCall('/products', {
@@ -353,26 +354,24 @@ const InventoryApp = () => {
         body: JSON.stringify(payload),
       });
 
-      if (response.success || response.product_id || response.id) {
+      if (response.success || response.id || response.product_id) {
         showAlert('Success', 'Product added successfully!');
         resetForm();
         setCurrentScreen('products');
         await fetchProducts();
       } else {
-        throw new Error('Unexpected response from server');
+        throw new Error(response.message || 'Failed to add product');
       }
     } catch (err: any) {
-      const errorMessage = err.message || 'Failed to create product';
-      setError(errorMessage);
-      showAlert('Error', errorMessage);
+      setError(err.message);
+      showAlert('Error', err.message);
     } finally {
       setLoading(false);
     }
-  }, [formData, validateForm, apiCall, showAlert, resetForm, fetchProducts]);
+  }, [formData, validateForm, apiCall, showAlert, resetForm, fetchProducts, loading]);
 
   const handleUpdateProduct = useCallback(async () => {
-    if (!selectedProduct) return;
-
+    if (!selectedProduct || loading) return;
     try {
       setLoading(true);
       setError(null);
@@ -380,53 +379,37 @@ const InventoryApp = () => {
       const validationError = validateForm(formData, true);
       if (validationError) throw new Error(validationError);
 
-      // Clean the payload to match server expectations
       const payload = {
-        name: formData.name.trim(),
-        description: formData.description.trim() || null,
+        ...formData,
         price: parseFloat(formData.price),
-        stock: parseInt(formData.stock || '0', 10),
-        category: formData.category.trim() || null,
-        location: formData.location.trim() || null,
-        image: formData.image.trim() || null,
-        status: formData.status,
-        brand: formData.brand.trim() || null,
-        sizes: formData.sizes.trim() || null,
-        productCode: formData.productCode.trim() || null,
-        orderName: formData.orderName.trim() || null,
-        // Only include storeAvailability if it has data
-        ...(formData.storeAvailability && formData.storeAvailability.length > 0 && {
-          storeAvailability: formData.storeAvailability
-        })
+        stock: parseInt(formData.stock, 10) || 0,
+        storeAvailability: JSON.stringify(formData.storeAvailability || []),
       };
-
-      console.log('Update payload:', JSON.stringify(payload, null, 2));
 
       const response = await apiCall(`/products/${selectedProduct.id}`, {
         method: 'PUT',
         body: JSON.stringify(payload),
       });
 
-      if (response.success !== false) {
+      if (response.success || response.message === 'Product updated successfully') {
         showAlert('Success', 'Product updated successfully!');
         resetForm();
         setCurrentScreen('products');
         setSelectedProduct(null);
         await fetchProducts();
       } else {
-        throw new Error(response.message || 'Unexpected response from server');
+        throw new Error(response.message || 'Failed to update product');
       }
     } catch (err: any) {
-      console.error('Update product error:', err);
-      const errorMessage = err.message || 'Failed to update product';
-      setError(errorMessage);
-      showAlert('Error', errorMessage);
+      setError(err.message);
+      showAlert('Error', err.message);
     } finally {
       setLoading(false);
     }
-  }, [selectedProduct, formData, validateForm, apiCall, showAlert, resetForm, fetchProducts]);
+  }, [selectedProduct, formData, validateForm, apiCall, showAlert, resetForm, fetchProducts, loading]);
 
   const handleDeleteProduct = useCallback(async (productId: string) => {
+    if (loading) return;
     Alert.alert(
       'Confirm Delete',
       'Are you sure you want to delete this product?',
@@ -444,18 +427,17 @@ const InventoryApp = () => {
                 method: 'DELETE',
               });
 
-              if (response.success || response.message) {
+              if (response.success || response.message === 'Product deleted successfully') {
                 showAlert('Success', 'Product deleted successfully!');
                 setCurrentScreen('products');
                 setSelectedProduct(null);
                 await fetchProducts();
               } else {
-                throw new Error('Failed to delete product');
+                throw new Error(response.message || 'Failed to delete product');
               }
             } catch (err: any) {
-              const errorMessage = err.message || 'Failed to delete product';
-              setError(errorMessage);
-              showAlert('Error', errorMessage);
+              setError(err.message);
+              showAlert('Error', err.message);
             } finally {
               setLoading(false);
             }
@@ -463,7 +445,7 @@ const InventoryApp = () => {
         },
       ]
     );
-  }, [apiCall, showAlert, fetchProducts]);
+  }, [apiCall, showAlert, fetchProducts, loading]);
 
   // Navigation Functions
   const navigateToScreen = useCallback((screen: string, product?: Product) => {
@@ -478,7 +460,7 @@ const InventoryApp = () => {
     if (!selectedProduct) return;
     
     setFormData({
-      name: selectedProduct.name,
+      name: selectedProduct.name || '',
       description: selectedProduct.description || '',
       price: selectedProduct.price?.toString() || '',
       stock: selectedProduct.stock?.toString() || '',
@@ -495,22 +477,6 @@ const InventoryApp = () => {
     setCurrentScreen('edit-product');
   }, [selectedProduct]);
 
-  // Focus Management
-  const focusField = useCallback((fieldName: string) => {
-    if (!fieldName) return;
-    
-    const ref = formRefs.current[fieldName];
-    if (ref) {
-      setTimeout(() => {
-        try {
-          ref.focus();
-        } catch (error) {
-          console.log('Focus error:', error);
-        }
-      }, 100);
-    }
-  }, []);
-
   // Effects
   useEffect(() => {
     if (authToken && (currentScreen === 'products' || currentScreen === 'dashboard')) {
@@ -518,7 +484,6 @@ const InventoryApp = () => {
     }
   }, [authToken, currentScreen, fetchProducts]);
 
-  // Only clear error when screen changes
   useEffect(() => {
     setError(null);
   }, [currentScreen]);
@@ -550,39 +515,30 @@ const InventoryApp = () => {
     keyboardType = 'default',
     multiline = false,
     required = false,
-    onSubmitEditing,
-    returnKeyType = 'next',
     refKey,
+    nextRefKey,
+    onSubmitEditing,
+    returnKeyType,
     autoFocus = false,
     autoComplete,
     textContentType,
   }: any) => {
-    // Use local state to prevent re-renders from parent
-    const [localValue, setLocalValue] = useState(value || '');
-    const [isFocused, setIsFocused] = useState(false);
-    
-    // Sync with parent value only when not focused
-    useEffect(() => {
-      if (!isFocused) {
-        setLocalValue(value || '');
+    const handleSubmitEditing = useCallback(() => {
+      if (nextRefKey && !multiline) {
+        focusNextInput(nextRefKey);
       }
-    }, [value, isFocused]);
-    
-    const handleChange = useCallback((text: string) => {
-      setLocalValue(text);
-      onChangeText(text);
-    }, [onChangeText]);
-    
-    const handleFocus = useCallback(() => {
-      setIsFocused(true);
-    }, []);
-    
-    const handleBlur = useCallback(() => {
-      setIsFocused(false);
-      // Sync final value with parent
-      onChangeText(localValue);
-    }, [localValue, onChangeText]);
-    
+      if (onSubmitEditing) {
+        onSubmitEditing();
+      }
+    }, [nextRefKey, multiline, onSubmitEditing]);
+
+    const getReturnKeyType = useCallback(() => {
+      if (returnKeyType) return returnKeyType;
+      if (multiline) return 'default';
+      if (nextRefKey) return 'next';
+      return 'done';
+    }, [returnKeyType, multiline, nextRefKey]);
+
     return (
       <View style={styles.inputContainer}>
         <Text style={styles.inputLabel}>
@@ -591,31 +547,23 @@ const InventoryApp = () => {
         <TextInput
           ref={(ref) => {
             if (refKey) {
-              formRefs.current[refKey] = ref;
+              inputRefs.current[refKey] = ref;
             }
           }}
-          style={[
-            styles.input, 
-            multiline && styles.multilineInput,
-            isFocused && styles.inputFocused
-          ]}
-          value={localValue}
-          onChangeText={handleChange}
+          style={[styles.input, multiline && styles.multilineInput]}
+          value={value ?? ''}
+          onChangeText={onChangeText}
           placeholder={placeholder}
           placeholderTextColor="#9ca3af"
           secureTextEntry={secureTextEntry}
           keyboardType={keyboardType}
           multiline={multiline}
-          onSubmitEditing={onSubmitEditing}
-          returnKeyType={returnKeyType}
+          onSubmitEditing={handleSubmitEditing}
+          returnKeyType={getReturnKeyType()}
           autoFocus={autoFocus}
-          blurOnSubmit={false}
-          onFocus={handleFocus}
-          onBlur={handleBlur}
+          blurOnSubmit={!multiline && !nextRefKey}
           autoCorrect={false}
           spellCheck={false}
-          editable={true}
-          selectTextOnFocus={false}
           {...(autoComplete && { autoComplete })}
           {...(textContentType && { textContentType })}
         />
@@ -712,17 +660,13 @@ const InventoryApp = () => {
   };
 
   const LoginScreen = () => {
-    // Memoize handlers to prevent re-creation
-    const handleUsernameChange = useCallback((text: string) => setUsername(text), []);
-    const handlePasswordChange = useCallback((text: string) => setPassword(text), []);
-    
     return (
       <SafeAreaView style={styles.container}>
         <LinearGradient colors={['#8B5CF6', '#7C3AED']} style={styles.loginContainer}>
           <StatusBar barStyle="light-content" />
           <KeyboardAvoidingView 
             behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-            style={styles.keyboardAvoidingView}
+            style={styles.flex}
           >
             <ScrollView 
               contentContainerStyle={styles.scrollContent}
@@ -736,19 +680,20 @@ const InventoryApp = () => {
                 <CustomTextInput
                   label="Username"
                   value={username}
-                  onChangeText={handleUsernameChange}
+                  onChangeText={setUsername}
                   placeholder="Enter your username"
                   required
                   refKey="loginUsername"
-                  onSubmitEditing={() => focusField('loginPassword')}
+                  nextRefKey="loginPassword"
                   autoComplete="username"
                   textContentType="username"
+                  autoFocus={Platform.OS === 'ios'}
                 />
 
                 <CustomTextInput
                   label="Password"
                   value={password}
-                  onChangeText={handlePasswordChange}
+                  onChangeText={setPassword}
                   placeholder="Enter your password"
                   secureTextEntry
                   required
@@ -790,18 +735,13 @@ const InventoryApp = () => {
   };
 
   const RegisterScreen = () => {
-    // Memoize handlers to prevent re-creation
-    const handleUsernameChange = useCallback((text: string) => setUsername(text), []);
-    const handleEmailChange = useCallback((text: string) => setEmail(text), []);
-    const handlePasswordChange = useCallback((text: string) => setPassword(text), []);
-    
     return (
       <SafeAreaView style={styles.container}>
         <LinearGradient colors={['#8B5CF6', '#7C3AED']} style={styles.loginContainer}>
           <StatusBar barStyle="light-content" />
           <KeyboardAvoidingView 
             behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-            style={styles.keyboardAvoidingView}
+            style={styles.flex}
           >
             <ScrollView 
               contentContainerStyle={styles.scrollContent}
@@ -815,23 +755,24 @@ const InventoryApp = () => {
                 <CustomTextInput
                   label="Username"
                   value={username}
-                  onChangeText={handleUsernameChange}
+                  onChangeText={setUsername}
                   placeholder="Enter your username"
                   required
                   refKey="regUsername"
-                  onSubmitEditing={() => focusField('regEmail')}
+                  nextRefKey="regEmail"
                   autoComplete="username"
                   textContentType="username"
+                  autoFocus={Platform.OS === 'ios'}
                 />
 
                 <CustomTextInput
                   label="Email (Optional)"
                   value={email}
-                  onChangeText={handleEmailChange}
+                  onChangeText={setEmail}
                   placeholder="Enter your email"
                   keyboardType="email-address"
                   refKey="regEmail"
-                  onSubmitEditing={() => focusField('regPassword')}
+                  nextRefKey="regPassword"
                   autoComplete="email"
                   textContentType="emailAddress"
                 />
@@ -839,7 +780,7 @@ const InventoryApp = () => {
                 <CustomTextInput
                   label="Password"
                   value={password}
-                  onChangeText={handlePasswordChange}
+                  onChangeText={setPassword}
                   placeholder="Enter your password (min 6 characters)"
                   secureTextEntry
                   required
@@ -900,11 +841,6 @@ const InventoryApp = () => {
       <View style={styles.searchBar}>
         <Text style={styles.searchIcon}>🔍</Text>
         <TextInput
-          ref={(searchRef) => {
-            if (searchRef) {
-              // Don't store search refs in form refs to avoid conflicts
-            }
-          }}
           style={styles.searchInput}
           placeholder={placeholder}
           placeholderTextColor="#999"
@@ -913,7 +849,6 @@ const InventoryApp = () => {
           returnKeyType="search"
           autoCorrect={false}
           clearButtonMode="while-editing"
-          editable={true}
         />
         {searchQuery.length > 0 && (
           <TouchableOpacity 
@@ -1302,7 +1237,11 @@ const InventoryApp = () => {
           behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
           style={styles.flex}
         >
-          <ScrollView style={styles.formContainer}>
+          <ScrollView 
+            style={styles.formContainer}
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false}
+          >
             <CustomTextInput
               label="Name"
               value={formData.name}
@@ -1311,7 +1250,7 @@ const InventoryApp = () => {
               required
               autoFocus
               refKey="name"
-              onSubmitEditing={() => focusField('description')}
+              nextRefKey="description"
             />
 
             <CustomTextInput
@@ -1321,6 +1260,7 @@ const InventoryApp = () => {
               placeholder="Enter description"
               multiline
               refKey="description"
+              nextRefKey="price"
             />
 
             <CustomTextInput
@@ -1331,7 +1271,7 @@ const InventoryApp = () => {
               keyboardType="numeric"
               required
               refKey="price"
-              onSubmitEditing={() => focusField('stock')}
+              nextRefKey="stock"
             />
 
             <CustomTextInput
@@ -1341,7 +1281,7 @@ const InventoryApp = () => {
               placeholder="Enter stock quantity"
               keyboardType="numeric"
               refKey="stock"
-              onSubmitEditing={() => focusField('category')}
+              nextRefKey="category"
             />
 
             <CustomTextInput
@@ -1350,7 +1290,7 @@ const InventoryApp = () => {
               onChangeText={(text: string) => setFormData(prev => ({ ...prev, category: text }))}
               placeholder="Enter category"
               refKey="category"
-              onSubmitEditing={() => focusField('brand')}
+              nextRefKey="brand"
             />
 
             <CustomTextInput
@@ -1359,7 +1299,7 @@ const InventoryApp = () => {
               onChangeText={(text: string) => setFormData(prev => ({ ...prev, brand: text }))}
               placeholder="Enter brand"
               refKey="brand"
-              onSubmitEditing={() => focusField('location')}
+              nextRefKey="location"
             />
 
             <CustomTextInput
@@ -1368,7 +1308,7 @@ const InventoryApp = () => {
               onChangeText={(text: string) => setFormData(prev => ({ ...prev, location: text }))}
               placeholder="Enter location"
               refKey="location"
-              onSubmitEditing={() => focusField('sizes')}
+              nextRefKey="sizes"
             />
 
             <CustomTextInput
@@ -1377,7 +1317,7 @@ const InventoryApp = () => {
               onChangeText={(text: string) => setFormData(prev => ({ ...prev, sizes: text }))}
               placeholder="Enter sizes (e.g., S,M,L)"
               refKey="sizes"
-              onSubmitEditing={() => focusField('productCode')}
+              nextRefKey="productCode"
             />
 
             <CustomTextInput
@@ -1386,7 +1326,7 @@ const InventoryApp = () => {
               onChangeText={(text: string) => setFormData(prev => ({ ...prev, productCode: text }))}
               placeholder="Enter product code"
               refKey="productCode"
-              onSubmitEditing={() => focusField('orderName')}
+              nextRefKey="orderName"
             />
 
             <CustomTextInput
@@ -1395,7 +1335,7 @@ const InventoryApp = () => {
               onChangeText={(text: string) => setFormData(prev => ({ ...prev, orderName: text }))}
               placeholder="Enter order name"
               refKey="orderName"
-              onSubmitEditing={() => focusField('image')}
+              nextRefKey="image"
             />
 
             <CustomTextInput
@@ -1456,7 +1396,11 @@ const InventoryApp = () => {
           behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
           style={styles.flex}
         >
-          <ScrollView style={styles.formContainer}>
+          <ScrollView 
+            style={styles.formContainer}
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false}
+          >
             <CustomTextInput
               label="Name"
               value={formData.name}
@@ -1464,7 +1408,7 @@ const InventoryApp = () => {
               placeholder="Enter product name"
               required
               refKey="editName"
-              onSubmitEditing={() => focusField('editDescription')}
+              nextRefKey="editDescription"
             />
 
             <CustomTextInput
@@ -1474,6 +1418,7 @@ const InventoryApp = () => {
               placeholder="Enter description"
               multiline
               refKey="editDescription"
+              nextRefKey="editPrice"
             />
 
             <CustomTextInput
@@ -1484,7 +1429,7 @@ const InventoryApp = () => {
               keyboardType="numeric"
               required
               refKey="editPrice"
-              onSubmitEditing={() => focusField('editStock')}
+              nextRefKey="editStock"
             />
 
             <CustomTextInput
@@ -1494,7 +1439,7 @@ const InventoryApp = () => {
               placeholder="Enter stock quantity"
               keyboardType="numeric"
               refKey="editStock"
-              onSubmitEditing={() => focusField('editCategory')}
+              nextRefKey="editCategory"
             />
 
             <CustomTextInput
@@ -1503,7 +1448,7 @@ const InventoryApp = () => {
               onChangeText={(text: string) => setFormData(prev => ({ ...prev, category: text }))}
               placeholder="Enter category"
               refKey="editCategory"
-              onSubmitEditing={() => focusField('editBrand')}
+              nextRefKey="editBrand"
             />
 
             <CustomTextInput
@@ -1512,7 +1457,7 @@ const InventoryApp = () => {
               onChangeText={(text: string) => setFormData(prev => ({ ...prev, brand: text }))}
               placeholder="Enter brand"
               refKey="editBrand"
-              onSubmitEditing={() => focusField('editLocation')}
+              nextRefKey="editLocation"
             />
 
             <CustomTextInput
@@ -1521,7 +1466,7 @@ const InventoryApp = () => {
               onChangeText={(text: string) => setFormData(prev => ({ ...prev, location: text }))}
               placeholder="Enter location"
               refKey="editLocation"
-              onSubmitEditing={() => focusField('editSizes')}
+              nextRefKey="editSizes"
             />
 
             <CustomTextInput
@@ -1530,7 +1475,7 @@ const InventoryApp = () => {
               onChangeText={(text: string) => setFormData(prev => ({ ...prev, sizes: text }))}
               placeholder="Enter sizes (e.g., S,M,L)"
               refKey="editSizes"
-              onSubmitEditing={() => focusField('editProductCode')}
+              nextRefKey="editProductCode"
             />
 
             <CustomTextInput
@@ -1539,7 +1484,7 @@ const InventoryApp = () => {
               onChangeText={(text: string) => setFormData(prev => ({ ...prev, productCode: text }))}
               placeholder="Enter product code"
               refKey="editProductCode"
-              onSubmitEditing={() => focusField('editOrderName')}
+              nextRefKey="editOrderName"
             />
 
             <CustomTextInput
@@ -1548,7 +1493,7 @@ const InventoryApp = () => {
               onChangeText={(text: string) => setFormData(prev => ({ ...prev, orderName: text }))}
               placeholder="Enter order name"
               refKey="editOrderName"
-              onSubmitEditing={() => focusField('editImage')}
+              nextRefKey="editImage"
             />
 
             <CustomTextInput
@@ -1725,9 +1670,6 @@ const styles = StyleSheet.create({
   flex: {
     flex: 1,
   },
-  keyboardAvoidingView: {
-    flex: 1,
-  },
   scrollContent: {
     flexGrow: 1,
     justifyContent: 'center',
@@ -1795,12 +1737,6 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.05,
     shadowRadius: 2,
     elevation: 1,
-  },
-  inputFocused: {
-    borderColor: '#8B5CF6',
-    borderWidth: 2,
-    shadowColor: '#8B5CF6',
-    shadowOpacity: 0.1,
   },
   multilineInput: {
     minHeight: 80,
