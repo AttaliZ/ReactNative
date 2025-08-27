@@ -9,7 +9,12 @@
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSCameraUsageDescription": "This app needs access to camera to take product photos",
+        "NSPhotoLibraryUsageDescription": "This app needs access to photo library to select product images",
+        "NSDocumentPickerUsageDescription": "This app needs access to documents to upload product files"
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -17,7 +22,13 @@
         "backgroundColor": "#ffffff"
       },
       "edgeToEdgeEnabled": true,
-      "package": "com.anonymous.MyProfileAppNindam1"
+      "package": "com.anonymous.MyProfileAppNindam1",
+      "permissions": [
+        "android.permission.CAMERA",
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.READ_MEDIA_IMAGES",
+        "android.permission.READ_MEDIA_VIDEO"
+      ]
     },
     "web": {
       "bundler": "metro",
@@ -26,7 +37,7 @@
       "router": {
         "type": "hash"
       },
-      "prerender": false  
+      "prerender": false
     },
     "plugins": [
       "expo-router",
@@ -37,6 +48,19 @@
           "imageWidth": 200,
           "resizeMode": "contain",
           "backgroundColor": "#ffffff"
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Allow this app to access your photos to upload product images",
+          "cameraPermission": "Allow this app to access your camera to take product photos"
+        }
+      ],
+      [
+        "expo-document-picker",
+        {
+          "iCloudContainerEnvironment": "Production"
         }
       ]
     ],

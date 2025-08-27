@@ -19,13 +19,12 @@ import BottomNavigation from './components/BottomNavigation';
 import CategoryCard from './components/CategoryCard';
 import CustomTextInput from './components/CustomTextInput';
 import Header from './components/Header';
-import ImageUpload from './components/ImageUploadComponent';
+import ImageUploadComponent from './components/ImageUploadComponent';
 import { EmptyState, ErrorMessage, LoadingIndicator } from './components/LoadingAndError';
 import ProductCard from './components/ProductCard';
 import SearchBar from './components/SearchBar';
 import SideMenu from './components/SideMenu';
 import StatusSelector from './components/StatusSelector';
-
 // Types
 interface Product {
   id: string;
@@ -1259,7 +1258,7 @@ const [password, setPassword] = useState<string>('');
         <ScrollView style={styles.productDetailContainer}>
           <View style={styles.productDetailImageContainer}>
             {selectedProduct.image ? (
-              <ImageUpload
+              <ImageUploadComponent
                 imageUri={selectedProduct.image}
                 onImageChange={() => {}} // Read-only in detail view
                 style={styles.detailImageUpload}
@@ -1530,9 +1529,9 @@ const [password, setPassword] = useState<string>('');
                 onSubmitEditing={handleAddProduct}
               />
 
-              <ImageUpload
+              <ImageUploadComponent
                 imageUri={formData.image}
-                onImageChange={uri => handleFormDataChange('image', uri)}
+                onImageChange={(uri: string) => handleFormDataChange('image', uri)}
                 placeholder="Add product image"
                 style={styles.detailImageUpload}
               />
@@ -1732,7 +1731,7 @@ const [password, setPassword] = useState<string>('');
                 onSubmitEditing={handleUpdateProduct}
               />
 
-              <ImageUpload
+              <ImageUploadComponent
                 imageUri={formData.image}
                 onImageChange={uri => handleFormDataChange('image', uri)}
                 placeholder="Update product image"

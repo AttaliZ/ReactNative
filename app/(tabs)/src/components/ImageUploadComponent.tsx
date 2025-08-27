@@ -21,39 +21,110 @@ interface ImageUploadComponentProps {
 const ImageUploadComponent: React.FC<ImageUploadComponentProps> = ({
   imageUri,
   onImageChange,
-  placeholder = "Tap to add image",
+  placeholder = "Add product image",
   style,
 }) => {
   const [uploading, setUploading] = useState(false);
 
   const handleImagePicker = useCallback(async () => {
     try {
-      if (Platform.OS !== 'web') {
-        const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-        if (status !== 'granted') {
-          Alert.alert('Permission Required', 'Please grant permission to access your photo library');
-          return;
-        }
+      console.log('Image picker pressed'); // Debug log
+
+      // สำหรับ web - เปิด file picker โดยตรง
+      if (Platform.OS === 'web') {
+        console.log('Running on web - opening file picker directly');
+        openWebFilePicker();
+        return;
       }
 
-      Alert.alert(
-        'Select Image',
-        'Choose how you want to add an image',
-        [
-          { text: 'Camera', onPress: () => openCamera() },
-          { text: 'Gallery', onPress: () => openImagePicker() },
-          { text: 'Cancel', style: 'cancel' },
-        ],
-        { cancelable: true }
-      );
+      console.log('Requesting permissions...'); // Debug log
+      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      console.log('Permission status:', status); // Debug log
+      
+      if (status !== 'granted') {
+        Alert.alert('Permission Required', 'Please grant permission to access your photo library');
+        return;
+      }
+      
+      console.log('Permissions granted - showing options'); // Debug log
+      showImageOptions();
     } catch (error) {
       console.error('Error:', error);
-      Alert.alert('Error', 'Failed to request permissions');
+      Alert.alert('Error', 'Failed to request permissions: ' + (error instanceof Error ? error.message : 'Unknown error'));
     }
   }, []);
 
+  const openWebFilePicker = () => {
+    console.log('Opening web file picker');
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'image/*';
+    input.style.display = 'none';
+    
+    input.onchange = (e) => {
+      const file = (e.target as HTMLInputElement).files?.[0];
+      if (file) {
+        console.log('Web file selected:', file.name);
+        setUploading(true);
+        const reader = new FileReader();
+        reader.onload = () => {
+          const result = reader.result as string;
+          console.log('File read successfully');
+          onImageChange(result);
+          setUploading(false);
+        };
+        reader.onerror = () => {
+          console.error('File read error');
+          setUploading(false);
+          alert('Error reading file');
+        };
+        reader.readAsDataURL(file);
+      } else {
+        console.log('No file selected');
+      }
+      document.body.removeChild(input);
+    };
+    
+    document.body.appendChild(input);
+    input.click();
+  };
+
+  const showImageOptions = () => {
+    console.log('Showing image options alert'); // Debug log
+    Alert.alert(
+      'Select Image',
+      'Choose how you want to add an image',
+      [
+        { 
+          text: 'Camera', 
+          onPress: () => {
+            console.log('Camera option selected');
+            openCamera();
+          }
+        },
+        { 
+          text: 'Gallery', 
+          onPress: () => {
+            console.log('Gallery option selected');
+            openImagePicker();
+          }
+        },
+        { text: 'Cancel', style: 'cancel' },
+      ],
+      { cancelable: true }
+    );
+  };
+
   const openCamera = async () => {
     try {
+      console.log('Opening camera...'); // Debug log
+      
+      // บน Web - Camera API ซับซ้อนกว่า ให้ใช้ gallery แทน
+      if (Platform.OS === 'web') {
+        Alert.alert('Camera not available on web', 'Please use Gallery option instead');
+        return;
+      }
+      
       const { status } = await ImagePicker.requestCameraPermissionsAsync();
       if (status !== 'granted') {
         Alert.alert('Permission Required', 'Camera permission is needed');
@@ -68,11 +139,16 @@ const ImageUploadComponent: React.FC<ImageUploadComponentProps> = ({
         quality: 0.8,
       });
 
+      console.log('Camera result:', result); // Debug log
+
       if (!result.canceled && result.assets[0]) {
-        onImageChange(result.assets[0].uri);
+        const asset = result.assets[0];
+        console.log('Selected from camera:', asset.uri); // Debug log
+        onImageChange(asset.uri);
       }
     } catch (error) {
-      Alert.alert('Error', 'Failed to open camera');
+      console.error('Camera error:', error);
+      Alert.alert('Error', 'Failed to open camera: ' + (error instanceof Error ? error.message : 'Unknown error'));
     } finally {
       setUploading(false);
     }
@@ -80,7 +156,34 @@ const ImageUploadComponent: React.FC<ImageUploadComponentProps> = ({
 
   const openImagePicker = async () => {
     try {
+      console.log('Opening image picker...'); // Debug log
       setUploading(true);
+      
+      // สำหรับ Web - ใช้ HTML input file
+      if (Platform.OS === 'web') {
+        console.log('Using web file input');
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.accept = 'image/*';
+        input.onchange = (e) => {
+          const file = (e.target as HTMLInputElement).files?.[0];
+          if (file) {
+            const reader = new FileReader();
+            reader.onload = () => {
+              const result = reader.result as string;
+              console.log('Web file selected:', file.name);
+              onImageChange(result);
+              setUploading(false);
+            };
+            reader.readAsDataURL(file);
+          } else {
+            setUploading(false);
+          }
+        };
+        input.click();
+        return;
+      }
+
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ImagePicker.MediaTypeOptions.Images,
         allowsEditing: true,
@@ -88,11 +191,16 @@ const ImageUploadComponent: React.FC<ImageUploadComponentProps> = ({
         quality: 0.8,
       });
 
+      console.log('Image picker result:', result); // Debug log
+
       if (!result.canceled && result.assets[0]) {
-        onImageChange(result.assets[0].uri);
+        const asset = result.assets[0];
+        console.log('Selected from gallery:', asset.uri); // Debug log
+        onImageChange(asset.uri);
       }
     } catch (error) {
-      Alert.alert('Error', 'Failed to pick image');
+      console.error('Image picker error:', error);
+      Alert.alert('Error', 'Failed to pick image: ' + (error instanceof Error ? error.message : 'Unknown error'));
     } finally {
       setUploading(false);
     }
@@ -117,11 +225,12 @@ const ImageUploadComponent: React.FC<ImageUploadComponentProps> = ({
         style={styles.imageContainer}
         onPress={handleImagePicker}
         disabled={uploading}
+        activeOpacity={0.7}
       >
         {uploading ? (
           <View style={styles.loadingContainer}>
             <ActivityIndicator size="large" color="#8B5CF6" />
-            <Text style={styles.loadingText}>Uploading...</Text>
+            <Text style={styles.loadingText}>Loading...</Text>
           </View>
         ) : imageUri ? (
           <>
