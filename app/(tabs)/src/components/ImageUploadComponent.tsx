@@ -1,9 +1,8 @@
-import { Image } from 'expo-image';
-import * as ImagePicker from 'expo-image-picker';
 import React, { useCallback, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Image,
   Platform,
   StyleSheet,
   Text,
@@ -25,37 +24,38 @@ const ImageUploadComponent: React.FC<ImageUploadComponentProps> = ({
   style,
 }) => {
   const [uploading, setUploading] = useState(false);
+  const [imageError, setImageError] = useState(false);
+
+  // Validate if URI is a proper image
+  const isValidImage = (uri: string) => {
+    if (!uri) return false;
+    
+    // Check for data URL (base64)
+    if (uri.startsWith('data:image/')) return true;
+    
+    // Check for HTTP/HTTPS URLs with image extensions
+    const imageExtensions = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp'];
+    const isHttpUrl = uri.startsWith('http://') || uri.startsWith('https://');
+    const hasImageExt = imageExtensions.some(ext => uri.toLowerCase().includes(ext));
+    
+    return isHttpUrl && hasImageExt;
+  };
 
   const handleImagePicker = useCallback(async () => {
     try {
-      console.log('Image picker pressed'); // Debug log
-
-      // สำหรับ web - เปิด file picker โดยตรง
       if (Platform.OS === 'web') {
-        console.log('Running on web - opening file picker directly');
         openWebFilePicker();
         return;
       }
-
-      console.log('Requesting permissions...'); // Debug log
-      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-      console.log('Permission status:', status); // Debug log
       
-      if (status !== 'granted') {
-        Alert.alert('Permission Required', 'Please grant permission to access your photo library');
-        return;
-      }
-      
-      console.log('Permissions granted - showing options'); // Debug log
-      showImageOptions();
+      // For mobile - simple alert for now
+      Alert.alert('Image Picker', 'Mobile image picking not implemented yet');
     } catch (error) {
-      console.error('Error:', error);
-      Alert.alert('Error', 'Failed to request permissions: ' + (error instanceof Error ? error.message : 'Unknown error'));
+      Alert.alert('Error', 'Failed to open image picker');
     }
   }, []);
 
   const openWebFilePicker = () => {
-    console.log('Opening web file picker');
     const input = document.createElement('input');
     input.type = 'file';
     input.accept = 'image/*';
@@ -64,158 +64,53 @@ const ImageUploadComponent: React.FC<ImageUploadComponentProps> = ({
     input.onchange = (e) => {
       const file = (e.target as HTMLInputElement).files?.[0];
       if (file) {
-        console.log('Web file selected:', file.name);
         setUploading(true);
+        setImageError(false);
         const reader = new FileReader();
         reader.onload = () => {
           const result = reader.result as string;
-          console.log('File read successfully');
           onImageChange(result);
           setUploading(false);
         };
         reader.onerror = () => {
-          console.error('File read error');
           setUploading(false);
-          alert('Error reading file');
+          setImageError(true);
+          Alert.alert('Error', 'Error reading file');
         };
         reader.readAsDataURL(file);
-      } else {
-        console.log('No file selected');
       }
-      document.body.removeChild(input);
+      if (document.body.contains(input)) {
+        document.body.removeChild(input);
+      }
     };
     
     document.body.appendChild(input);
     input.click();
   };
 
-  const showImageOptions = () => {
-    console.log('Showing image options alert'); // Debug log
-    Alert.alert(
-      'Select Image',
-      'Choose how you want to add an image',
-      [
-        { 
-          text: 'Camera', 
-          onPress: () => {
-            console.log('Camera option selected');
-            openCamera();
-          }
-        },
-        { 
-          text: 'Gallery', 
-          onPress: () => {
-            console.log('Gallery option selected');
-            openImagePicker();
-          }
-        },
-        { text: 'Cancel', style: 'cancel' },
-      ],
-      { cancelable: true }
-    );
-  };
-
-  const openCamera = async () => {
-    try {
-      console.log('Opening camera...'); // Debug log
-      
-      // บน Web - Camera API ซับซ้อนกว่า ให้ใช้ gallery แทน
-      if (Platform.OS === 'web') {
-        Alert.alert('Camera not available on web', 'Please use Gallery option instead');
-        return;
-      }
-      
-      const { status } = await ImagePicker.requestCameraPermissionsAsync();
-      if (status !== 'granted') {
-        Alert.alert('Permission Required', 'Camera permission is needed');
-        return;
-      }
-
-      setUploading(true);
-      const result = await ImagePicker.launchCameraAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
-        allowsEditing: true,
-        aspect: [1, 1],
-        quality: 0.8,
-      });
-
-      console.log('Camera result:', result); // Debug log
-
-      if (!result.canceled && result.assets[0]) {
-        const asset = result.assets[0];
-        console.log('Selected from camera:', asset.uri); // Debug log
-        onImageChange(asset.uri);
-      }
-    } catch (error) {
-      console.error('Camera error:', error);
-      Alert.alert('Error', 'Failed to open camera: ' + (error instanceof Error ? error.message : 'Unknown error'));
-    } finally {
-      setUploading(false);
-    }
-  };
-
-  const openImagePicker = async () => {
-    try {
-      console.log('Opening image picker...'); // Debug log
-      setUploading(true);
-      
-      // สำหรับ Web - ใช้ HTML input file
-      if (Platform.OS === 'web') {
-        console.log('Using web file input');
-        const input = document.createElement('input');
-        input.type = 'file';
-        input.accept = 'image/*';
-        input.onchange = (e) => {
-          const file = (e.target as HTMLInputElement).files?.[0];
-          if (file) {
-            const reader = new FileReader();
-            reader.onload = () => {
-              const result = reader.result as string;
-              console.log('Web file selected:', file.name);
-              onImageChange(result);
-              setUploading(false);
-            };
-            reader.readAsDataURL(file);
-          } else {
-            setUploading(false);
-          }
-        };
-        input.click();
-        return;
-      }
-
-      const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
-        allowsEditing: true,
-        aspect: [1, 1],
-        quality: 0.8,
-      });
-
-      console.log('Image picker result:', result); // Debug log
-
-      if (!result.canceled && result.assets[0]) {
-        const asset = result.assets[0];
-        console.log('Selected from gallery:', asset.uri); // Debug log
-        onImageChange(asset.uri);
-      }
-    } catch (error) {
-      console.error('Image picker error:', error);
-      Alert.alert('Error', 'Failed to pick image: ' + (error instanceof Error ? error.message : 'Unknown error'));
-    } finally {
-      setUploading(false);
-    }
-  };
-
   const handleRemoveImage = () => {
-    Alert.alert(
-      'Remove Image',
-      'Are you sure you want to remove this image?',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        { text: 'Remove', style: 'destructive', onPress: () => onImageChange('') },
-      ]
-    );
+    if (Platform.OS === 'web') {
+      const confirmed = window.confirm('Are you sure you want to remove this image?');
+      if (confirmed) {
+        onImageChange('');
+        setImageError(false);
+      }
+    } else {
+      Alert.alert(
+        'Remove Image',
+        'Are you sure you want to remove this image?',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Remove', style: 'destructive', onPress: () => {
+            onImageChange('');
+            setImageError(false);
+          }},
+        ]
+      );
+    }
   };
+
+  const shouldShowImage = imageUri && !imageError && isValidImage(imageUri);
 
   return (
     <View style={[styles.container, style]}>
@@ -232,28 +127,45 @@ const ImageUploadComponent: React.FC<ImageUploadComponentProps> = ({
             <ActivityIndicator size="large" color="#8B5CF6" />
             <Text style={styles.loadingText}>Loading...</Text>
           </View>
-        ) : imageUri ? (
-          <>
-            <Image source={{ uri: imageUri }} style={styles.image} />
+        ) : shouldShowImage ? (
+          <View style={styles.imageWrapper}>
+            <Image 
+              source={{ uri: imageUri }} 
+              style={styles.image}
+              resizeMode="cover"
+              onError={() => {
+                setImageError(true);
+              }}
+              onLoad={() => {
+                setImageError(false);
+              }}
+            />
             <View style={styles.imageOverlay}>
               <Text style={styles.changeText}>Tap to change</Text>
             </View>
-          </>
+          </View>
         ) : (
           <View style={styles.placeholderContainer}>
             <Text style={styles.placeholderIcon}>📷</Text>
-            <Text style={styles.placeholderText}>{placeholder}</Text>
+            <Text style={styles.placeholderText}>
+              {imageUri && !isValidImage(imageUri) ? 'Invalid Image Format' : placeholder}
+            </Text>
             <Text style={styles.placeholderSubtext}>
-              Tap to select from gallery or take photo
+              {imageUri && !isValidImage(imageUri) 
+                ? 'Tap to select a valid image'
+                : 'Tap to select from gallery'
+              }
             </Text>
           </View>
         )}
       </TouchableOpacity>
 
-      {imageUri && !uploading && (
-        <TouchableOpacity style={styles.removeButton} onPress={handleRemoveImage}>
-          <Text style={styles.removeButtonText}>Remove Image</Text>
-        </TouchableOpacity>
+      {shouldShowImage && !uploading && (
+        <View style={styles.removeButtonWrapper}>
+          <TouchableOpacity style={styles.removeButton} onPress={handleRemoveImage}>
+            <Text style={styles.removeButtonText}>Remove Image</Text>
+          </TouchableOpacity>
+        </View>
       )}
     </View>
   );
@@ -262,6 +174,9 @@ const ImageUploadComponent: React.FC<ImageUploadComponentProps> = ({
 const styles = StyleSheet.create({
   container: {
     marginBottom: 20,
+    width: '100%',
+    position: 'relative',
+    zIndex: 1,
   },
   label: {
     fontSize: 14,
@@ -271,6 +186,7 @@ const styles = StyleSheet.create({
   },
   imageContainer: {
     height: 200,
+    width: '100%',
     borderRadius: 12,
     borderWidth: 2,
     borderColor: '#e5e7eb',
@@ -279,10 +195,19 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     backgroundColor: '#f9fafb',
     overflow: 'hidden',
+    position: 'relative',
+    marginBottom: 8,
+  },
+  imageWrapper: {
+    width: '100%',
+    height: '100%',
+    position: 'relative',
+    overflow: 'hidden',
   },
   image: {
     width: '100%',
     height: '100%',
+    borderRadius: 10,
   },
   imageOverlay: {
     position: 'absolute',
@@ -290,17 +215,23 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     backgroundColor: 'rgba(0, 0, 0, 0.7)',
-    padding: 8,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
     alignItems: 'center',
+    justifyContent: 'center',
   },
   changeText: {
     color: '#fff',
     fontSize: 12,
     fontWeight: '500',
+    textAlign: 'center',
   },
   placeholderContainer: {
     alignItems: 'center',
+    justifyContent: 'center',
     padding: 20,
+    width: '100%',
+    height: '100%',
   },
   placeholderIcon: {
     fontSize: 48,
@@ -313,38 +244,55 @@ const styles = StyleSheet.create({
     color: '#6b7280',
     textAlign: 'center',
     marginBottom: 4,
+    width: '100%',
   },
   placeholderSubtext: {
     fontSize: 12,
     color: '#9ca3af',
     textAlign: 'center',
     lineHeight: 16,
+    maxWidth: 200,
+    width: '100%',
   },
   loadingContainer: {
     alignItems: 'center',
     justifyContent: 'center',
     padding: 20,
+    width: '100%',
+    height: '100%',
   },
   loadingText: {
     fontSize: 14,
     color: '#8B5CF6',
     marginTop: 8,
     fontWeight: '500',
+    textAlign: 'center',
+  },
+  removeButtonWrapper: {
+    position: 'relative',
+    zIndex: 100,
+    marginTop: 8,
+    marginBottom: 20,
+    backgroundColor: 'transparent',
   },
   removeButton: {
-    marginTop: 12,
-    paddingVertical: 8,
-    paddingHorizontal: 16,
+    paddingVertical: 12,
+    paddingHorizontal: 20,
     backgroundColor: '#fef2f2',
     borderRadius: 8,
     alignItems: 'center',
+    justifyContent: 'center',
     borderWidth: 1,
     borderColor: '#fecaca',
+    width: '100%',
+    minHeight: 40,
+    alignSelf: 'center',
   },
   removeButtonText: {
     color: '#dc2626',
     fontSize: 14,
     fontWeight: '600',
+    textAlign: 'center',
   },
 });
 

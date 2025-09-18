@@ -1,5 +1,5 @@
 import { LinearGradient } from 'expo-linear-gradient';
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   KeyboardAvoidingView,
@@ -25,6 +25,7 @@ import ProductCard from './components/ProductCard';
 import SearchBar from './components/SearchBar';
 import SideMenu from './components/SideMenu';
 import StatusSelector from './components/StatusSelector';
+
 // Types
 interface Product {
   id: string;
@@ -270,6 +271,7 @@ const styles = StyleSheet.create({
   productDetailImageContainer: {
     alignItems: 'center',
     marginBottom: 24,
+    zIndex: 1,
   },
   detailImageUpload: {
     width: 200,
@@ -278,19 +280,35 @@ const styles = StyleSheet.create({
   productDetailInfo: {
     alignItems: 'center',
     marginBottom: 24,
+    backgroundColor: '#fff',
+    paddingVertical: 24,
+    paddingHorizontal: 20,
+    borderRadius: 12,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 2,
+    marginHorizontal: 16,
+    zIndex: 2,
   },
   productDetailName: {
     fontSize: 24,
     fontWeight: '800',
     color: '#111827',
     textAlign: 'center',
-    marginBottom: 8,
+    marginBottom: 16,
+    backgroundColor: 'transparent',
+    lineHeight: 30,
   },
   productDetailBrand: {
     fontSize: 16,
     color: '#6b7280',
     fontWeight: '600',
-    marginBottom: 4,
+    marginBottom: 12,
+    backgroundColor: 'transparent',
+    textAlign: 'center',
+    lineHeight: 22,
   },
   productDetailCategory: {
     fontSize: 14,
@@ -298,6 +316,10 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     textTransform: 'uppercase',
     letterSpacing: 0.5,
+    backgroundColor: 'transparent',
+    textAlign: 'center',
+    lineHeight: 20,
+    marginTop: 0,
   },
   detailCard: {
     backgroundColor: '#fff',
@@ -407,12 +429,18 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingTop: 12,
   },
-  fallbackImage: {
+  fallbackImageContainer: {
     width: 200,
     height: 200,
     backgroundColor: '#e5e7eb',
     justifyContent: 'center',
     alignItems: 'center',
+    borderRadius: 12,
+  },
+  fallbackImageText: {
+    fontSize: 14,
+    color: '#6b7280',
+    textAlign: 'center',
   },
 });
 
@@ -423,8 +451,8 @@ const InventoryApp = () => {
   >('login');
   
   // User & Auth States
- const [username, setUsername] = useState<string>('');
-const [password, setPassword] = useState<string>('');
+  const [username, setUsername] = useState<string>('');
+  const [password, setPassword] = useState<string>('');
   const [email, setEmail] = useState('');
   const [user, setUser] = useState<User | null>(null);
   const [authToken, setAuthToken] = useState<string | null>(null);
@@ -488,12 +516,40 @@ const [password, setPassword] = useState<string>('');
     setEmail(text);
   }, []);
 
-  const handleFormDataChange = useCallback((field: keyof FormData, value: string) => {
-    setFormData(prev => ({ ...prev, [field]: value }));
+  // Fixed form data change handler
+  const handleFormDataChange = useCallback((field: keyof FormData) => {
+    return (value: string) => {
+      setFormData(prev => ({ ...prev, [field]: value }));
+    };
+  }, []);
+
+  // Stable form handlers
+  const formHandlers = useMemo(() => ({
+    name: handleFormDataChange('name'),
+    description: handleFormDataChange('description'),
+    price: handleFormDataChange('price'),
+    stock: handleFormDataChange('stock'),
+    category: handleFormDataChange('category'),
+    location: handleFormDataChange('location'),
+    image: handleFormDataChange('image'),
+    brand: handleFormDataChange('brand'),
+    sizes: handleFormDataChange('sizes'),
+    productCode: handleFormDataChange('productCode'),
+    orderName: handleFormDataChange('orderName'),
+  }), [handleFormDataChange]);
+
+  // Status change handler
+  const handleStatusChange = useCallback((status: 'Active' | 'Inactive') => {
+    setFormData(prev => ({ ...prev, status }));
   }, []);
 
   // API Functions
   const apiCall = useCallback(async (endpoint: string, options: any = {}) => {
+    console.log('📡 API Call started');
+    console.log('📡 Endpoint:', endpoint);
+    console.log('📡 Method:', options.method || 'GET');
+    console.log('📡 Auth token present:', !!authToken);
+    
     const config = {
       ...options,
       headers: {
@@ -504,21 +560,33 @@ const [password, setPassword] = useState<string>('');
       },
     };
 
+    console.log('📡 Request config:', config);
+    
     try {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 15000);
+      const timeoutId = setTimeout(() => {
+        console.log('⏰ Request timeout triggered');
+        controller.abort();
+      }, 15000);
       
-      const response = await fetch(`${API_BASE_URL}${endpoint}`, {
+      const fullUrl = `${API_BASE_URL}${endpoint}`;
+      console.log('📡 Full URL:', fullUrl);
+      
+      const response = await fetch(fullUrl, {
         ...config,
         signal: controller.signal,
       });
       
       clearTimeout(timeoutId);
+      
+      console.log('📡 Response status:', response.status);
+      console.log('📡 Response ok:', response.ok);
 
       if (!response.ok) {
         let errorMessage = `HTTP error ${response.status}`;
         try {
           const errorData = await response.json();
+          console.log('📡 Error response data:', errorData);
           errorMessage = errorData.error || errorData.message || errorMessage;
         } catch {
           errorMessage = response.statusText || errorMessage;
@@ -527,8 +595,10 @@ const [password, setPassword] = useState<string>('');
       }
 
       const data = await response.json();
+      console.log('📡 Success response data:', data);
       return data;
     } catch (err: any) {
+      console.error('📡 API Call error:', err);
       if (err.name === 'AbortError') {
         throw new Error('Request timed out. Please check your internet connection.');
       }
@@ -710,7 +780,7 @@ const [password, setPassword] = useState<string>('');
         body: JSON.stringify(payload),
       });
 
-      if (response.success || response.id || response.product_id) {
+      if (response.success || response.id || response.productId) {
         showAlert('Success', 'Product added successfully!');
         resetForm();
         setCurrentScreen('products');
@@ -765,43 +835,127 @@ const [password, setPassword] = useState<string>('');
   }, [selectedProduct, formData, validateForm, apiCall, showAlert, resetForm, fetchProducts, loading]);
 
   const handleDeleteProduct = useCallback(async (productId: string) => {
-    if (loading) return;
-    Alert.alert(
-      'Confirm Delete',
-      'Are you sure you want to delete this product?',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Delete',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              setLoading(true);
-              setError(null);
+    console.log('🔵 Delete function called with productId:', productId);
+    console.log('🔵 Product ID type:', typeof productId);
+    console.log('🔵 Auth token exists:', !!authToken);
+    console.log('🔵 Loading state:', loading);
+    
+    if (loading) {
+      console.log('❌ Request blocked - already loading');
+      return;
+    }
 
-              const response = await apiCall(`/products/${productId}`, {
-                method: 'DELETE',
-              });
+    console.log('🔵 Attempting to show confirmation...');
+    
+    // ตรวจสอบว่าเป็น web environment หรือไม่
+    const isWeb = Platform.OS === 'web';
+    
+    if (isWeb && typeof window !== 'undefined' && window.confirm) {
+      // ใช้ browser confirm สำหรับ web
+      console.log('🔵 Using browser confirm for web');
+      const confirmed = window.confirm(`Are you sure you want to delete product ID: ${productId}?`);
+      
+      if (confirmed) {
+        console.log('🟡 User confirmed delete via browser confirm');
+        try {
+          setLoading(true);
+          setError(null);
 
-              if (response.success || response.message === 'Product deleted successfully') {
-                showAlert('Success', 'Product deleted successfully!');
-                setCurrentScreen('products');
-                setSelectedProduct(null);
-                await fetchProducts();
-              } else {
-                throw new Error(response.message || 'Failed to delete product');
-              }
-            } catch (err: any) {
-              setError(err.message);
-              showAlert('Error', err.message);
-            } finally {
-              setLoading(false);
-            }
-          },
-        },
-      ]
-    );
-  }, [apiCall, showAlert, fetchProducts, loading]);
+          console.log('🟡 API URL:', `${API_BASE_URL}/products/${productId}`);
+          console.log('🟡 Auth Token:', authToken ? 'Present' : 'Missing');
+
+          const response = await apiCall(`/products/${productId}`, {
+            method: 'DELETE',
+          });
+
+          console.log('🟢 Delete response:', response);
+
+          if (response.success || response.message === 'Product deleted successfully') {
+            console.log('🟢 Delete successful, updating UI...');
+            showAlert('Success', 'Product deleted successfully!');
+            setCurrentScreen('products');
+            setSelectedProduct(null);
+            await fetchProducts();
+          } else {
+            console.log('🔴 Delete failed - invalid response:', response);
+            throw new Error(response.message || 'Failed to delete product');
+          }
+        } catch (err: any) {
+          console.error('🔴 Delete error:', err);
+          console.error('🔴 Error message:', err.message);
+          setError(err.message);
+          showAlert('Error', err.message);
+        } finally {
+          console.log('🔵 Delete process completed, setting loading to false');
+          setLoading(false);
+        }
+      } else {
+        console.log('🟡 User cancelled delete via browser confirm');
+      }
+    } else {
+      // ใช้ Alert.alert สำหรับ mobile
+      console.log('🔵 Using Alert.alert for mobile');
+      setTimeout(() => {
+        try {
+          Alert.alert(
+            'Confirm Delete',
+            `Are you sure you want to delete product ID: ${productId}?`,
+            [
+              { 
+                text: 'Cancel', 
+                style: 'cancel',
+                onPress: () => console.log('🟡 Delete cancelled by user')
+              },
+              {
+                text: 'Delete',
+                style: 'destructive',
+                onPress: async () => {
+                  try {
+                    console.log('🟡 Starting delete process...');
+                    setLoading(true);
+                    setError(null);
+
+                    console.log('🟡 API URL:', `${API_BASE_URL}/products/${productId}`);
+                    console.log('🟡 Auth Token:', authToken ? 'Present' : 'Missing');
+
+                    const response = await apiCall(`/products/${productId}`, {
+                      method: 'DELETE',
+                    });
+
+                    console.log('🟢 Delete response:', response);
+
+                    if (response.success || response.message === 'Product deleted successfully') {
+                      console.log('🟢 Delete successful, updating UI...');
+                      showAlert('Success', 'Product deleted successfully!');
+                      setCurrentScreen('products');
+                      setSelectedProduct(null);
+                      await fetchProducts();
+                    } else {
+                      console.log('🔴 Delete failed - invalid response:', response);
+                      throw new Error(response.message || 'Failed to delete product');
+                    }
+                  } catch (err: any) {
+                    console.error('🔴 Delete error:', err);
+                    console.error('🔴 Error message:', err.message);
+                    console.error('🔴 Error stack:', err.stack);
+                    setError(err.message);
+                    showAlert('Error', err.message);
+                  } finally {
+                    console.log('🔵 Delete process completed, setting loading to false');
+                    setLoading(false);
+                  }
+                },
+              },
+            ],
+            { cancelable: true }
+          );
+          console.log('🟢 Alert.alert called successfully');
+        } catch (alertError) {
+          console.error('🔴 Alert.alert failed:', alertError);
+        }
+      }, 100);
+    }
+  }, [apiCall, showAlert, fetchProducts, loading, authToken]);
 
   // Navigation Functions
   const navigateToScreen = useCallback((screen: string, product?: Product) => {
@@ -866,9 +1020,9 @@ const [password, setPassword] = useState<string>('');
   };
 
   // Custom Fallback Image Component
-  const FallbackImage = () => (
-    <View style={styles.fallbackImage}>
-      <Text>No Image Available</Text>
+  const FallbackImageContainer = () => (
+    <View style={styles.fallbackImageContainer}>
+      <Text style={styles.fallbackImageText}>No Image Available</Text>
     </View>
   );
 
@@ -927,7 +1081,6 @@ const [password, setPassword] = useState<string>('');
                   onSubmitEditing={() => focusNextInput('loginSubmit')}
                 />
 
-                {/* ช่อง submit ซ่อน (ใช้ refKey="loginSubmit") เพื่อให้ focus ได้ต่อเนื่อง */}
                 <TextInput
                   ref={ref => { inputRefs.current['loginSubmit'] = ref; }}
                   style={{ height: 0, width: 0, opacity: 0 }}
@@ -1182,50 +1335,48 @@ const [password, setPassword] = useState<string>('');
           </View>
         )}
 
-       <ScrollView style={styles.productsContainer} showsVerticalScrollIndicator={false}>
-  {loading ? (
-    <LoadingIndicator loading />
-  ) : error ? (
-    <ErrorMessage error={error} />
-  ) : filteredProducts.length === 0 ? (
-    <EmptyState
-      title={searchQuery ? 'No products found' : 'No products available'}
-      subtitle={
-        searchQuery
-          ? 'Try a different search term'
-          : 'Add a product to get started'
-      }
-      icon="📦"
-      actionText={
-        searchQuery
-          ? 'Clear Search'
-          : (user?.role === 'admin' ? 'Add Product' : undefined)
-      }
-      // มีปุ่มเมื่อ actionText มีค่าเท่านั้น
-      onAction={
-        searchQuery
-          ? () => setSearchQuery('')
-          : (user?.role === 'admin'
-              ? () => {
-                  resetForm();
-                  navigateToScreen('add-product');
-                }
-              : undefined)
-      }
-    />
-  ) : (
-    <>
-      {filteredProducts.map((product) => (
-        <ProductCard
-          key={String(product.id)}
-          product={product}
-          onPress={() => navigateToScreen('product-detail', product)}
-        />
-      ))}
-    </>
-  )}
-</ScrollView>
-
+        <ScrollView style={styles.productsContainer} showsVerticalScrollIndicator={false}>
+          {loading ? (
+            <LoadingIndicator loading />
+          ) : error ? (
+            <ErrorMessage error={error} />
+          ) : filteredProducts.length === 0 ? (
+            <EmptyState
+              title={searchQuery ? 'No products found' : 'No products available'}
+              subtitle={
+                searchQuery
+                  ? 'Try a different search term'
+                  : 'Add a product to get started'
+              }
+              icon="📦"
+              actionText={
+                searchQuery
+                  ? 'Clear Search'
+                  : (user?.role === 'admin' ? 'Add Product' : undefined)
+              }
+              onAction={
+                searchQuery
+                  ? () => setSearchQuery('')
+                  : (user?.role === 'admin'
+                      ? () => {
+                          resetForm();
+                          navigateToScreen('add-product');
+                        }
+                      : undefined)
+              }
+            />
+          ) : (
+            <>
+              {filteredProducts.map((product) => (
+                <ProductCard
+                  key={String(product.id)}
+                  product={product}
+                  onPress={() => navigateToScreen('product-detail', product)}
+                />
+              ))}
+            </>
+          )}
+        </ScrollView>
 
         <BottomNavigation 
           activeScreen="products"
@@ -1260,11 +1411,13 @@ const [password, setPassword] = useState<string>('');
             {selectedProduct.image ? (
               <ImageUploadComponent
                 imageUri={selectedProduct.image}
-                onImageChange={() => {}} // Read-only in detail view
+                onImageChange={() => {}}
                 style={styles.detailImageUpload}
               />
             ) : (
-              <FallbackImage />
+              <View style={styles.fallbackImageContainer}>
+                <Text style={styles.fallbackImageText}>No Image Available</Text>
+              </View>
             )}
           </View>
           
@@ -1340,7 +1493,17 @@ const [password, setPassword] = useState<string>('');
               </TouchableOpacity>
               <TouchableOpacity
                 style={[styles.actionButton, styles.deleteButton]}
-                onPress={() => handleDeleteProduct(selectedProduct.id)}
+                onPress={() => {
+                  console.log('Delete button pressed');
+                  console.log('Selected product ID:', selectedProduct.id);
+                  console.log('Selected product ID type:', typeof selectedProduct.id);
+                  if (selectedProduct?.id) {
+                    handleDeleteProduct(String(selectedProduct.id));
+                  } else {
+                    console.log('No product ID available');
+                    showAlert('Error', 'Product ID not found');
+                  }
+                }}
               >
                 <Text style={styles.actionButtonText}>Delete Product</Text>
               </TouchableOpacity>
@@ -1397,7 +1560,7 @@ const [password, setPassword] = useState<string>('');
               <CustomTextInput
                 label="Name"
                 value={formData.name}
-                onChangeText={(text) => handleFormDataChange('name', text)}
+                onChangeText={formHandlers.name}
                 placeholder="Enter product name"
                 required
                 refKey="name"
@@ -1412,7 +1575,7 @@ const [password, setPassword] = useState<string>('');
               <CustomTextInput
                 label="Description"
                 value={formData.description}
-                onChangeText={(text) => handleFormDataChange('description', text)}
+                onChangeText={formHandlers.description}
                 placeholder="Enter description"
                 multiline
                 numberOfLines={4}
@@ -1427,7 +1590,7 @@ const [password, setPassword] = useState<string>('');
               <CustomTextInput
                 label="Price"
                 value={formData.price}
-                onChangeText={(text) => handleFormDataChange('price', text)}
+                onChangeText={formHandlers.price}
                 placeholder="Enter price"
                 keyboardType="numeric"
                 required
@@ -1442,7 +1605,7 @@ const [password, setPassword] = useState<string>('');
               <CustomTextInput
                 label="Stock"
                 value={formData.stock}
-                onChangeText={(text) => handleFormDataChange('stock', text)}
+                onChangeText={formHandlers.stock}
                 placeholder="Enter stock quantity"
                 keyboardType="numeric"
                 refKey="stock"
@@ -1456,7 +1619,7 @@ const [password, setPassword] = useState<string>('');
               <CustomTextInput
                 label="Category"
                 value={formData.category}
-                onChangeText={(text) => handleFormDataChange('category', text)}
+                onChangeText={formHandlers.category}
                 placeholder="Enter category"
                 refKey="category"
                 nextRefKey="brand"
@@ -1469,7 +1632,7 @@ const [password, setPassword] = useState<string>('');
               <CustomTextInput
                 label="Brand"
                 value={formData.brand}
-                onChangeText={(text) => handleFormDataChange('brand', text)}
+                onChangeText={formHandlers.brand}
                 placeholder="Enter brand"
                 refKey="brand"
                 nextRefKey="location"
@@ -1482,7 +1645,7 @@ const [password, setPassword] = useState<string>('');
               <CustomTextInput
                 label="Location"
                 value={formData.location}
-                onChangeText={(text) => handleFormDataChange('location', text)}
+                onChangeText={formHandlers.location}
                 placeholder="Enter location"
                 refKey="location"
                 nextRefKey="sizes"
@@ -1495,7 +1658,7 @@ const [password, setPassword] = useState<string>('');
               <CustomTextInput
                 label="Sizes"
                 value={formData.sizes}
-                onChangeText={(text) => handleFormDataChange('sizes', text)}
+                onChangeText={formHandlers.sizes}
                 placeholder="Enter sizes (e.g., S,M,L)"
                 refKey="sizes"
                 nextRefKey="productCode"
@@ -1508,7 +1671,7 @@ const [password, setPassword] = useState<string>('');
               <CustomTextInput
                 label="Product Code"
                 value={formData.productCode}
-                onChangeText={(text) => handleFormDataChange('productCode', text)}
+                onChangeText={formHandlers.productCode}
                 placeholder="Enter product code"
                 refKey="productCode"
                 nextRefKey="orderName"
@@ -1521,7 +1684,7 @@ const [password, setPassword] = useState<string>('');
               <CustomTextInput
                 label="Order Name"
                 value={formData.orderName}
-                onChangeText={(text) => handleFormDataChange('orderName', text)}
+                onChangeText={formHandlers.orderName}
                 placeholder="Enter order name"
                 refKey="orderName"
                 inputRefs={inputRefs}
@@ -1531,14 +1694,14 @@ const [password, setPassword] = useState<string>('');
 
               <ImageUploadComponent
                 imageUri={formData.image}
-                onImageChange={(uri: string) => handleFormDataChange('image', uri)}
+                onImageChange={formHandlers.image}
                 placeholder="Add product image"
                 style={styles.detailImageUpload}
               />
 
               <StatusSelector
                 status={formData.status}
-                onStatusChange={status => handleFormDataChange('status', status)}
+                onStatusChange={handleStatusChange}
               />
 
               <ErrorMessage error={error} />
@@ -1599,7 +1762,7 @@ const [password, setPassword] = useState<string>('');
               <CustomTextInput
                 label="Name"
                 value={formData.name}
-                onChangeText={(text) => handleFormDataChange('name', text)}
+                onChangeText={formHandlers.name}
                 placeholder="Enter product name"
                 required
                 refKey="editName"
@@ -1614,7 +1777,7 @@ const [password, setPassword] = useState<string>('');
               <CustomTextInput
                 label="Description"
                 value={formData.description}
-                onChangeText={(text) => handleFormDataChange('description', text)}
+                onChangeText={formHandlers.description}
                 placeholder="Enter description"
                 multiline
                 numberOfLines={4}
@@ -1629,7 +1792,7 @@ const [password, setPassword] = useState<string>('');
               <CustomTextInput
                 label="Price"
                 value={formData.price}
-                onChangeText={(text) => handleFormDataChange('price', text)}
+                onChangeText={formHandlers.price}
                 placeholder="Enter price"
                 keyboardType={Platform.OS === 'ios' ? 'decimal-pad' : 'numeric'}
                 required
@@ -1644,7 +1807,7 @@ const [password, setPassword] = useState<string>('');
               <CustomTextInput
                 label="Stock"
                 value={formData.stock}
-                onChangeText={(text) => handleFormDataChange('stock', text)}
+                onChangeText={formHandlers.stock}
                 placeholder="Enter stock quantity"
                 keyboardType={Platform.OS === 'ios' ? 'decimal-pad' : 'numeric'}
                 refKey="editStock"
@@ -1658,7 +1821,7 @@ const [password, setPassword] = useState<string>('');
               <CustomTextInput
                 label="Category"
                 value={formData.category}
-                onChangeText={(text) => handleFormDataChange('category', text)}
+                onChangeText={formHandlers.category}
                 placeholder="Enter category"
                 refKey="editCategory"
                 nextRefKey="editBrand"
@@ -1671,7 +1834,7 @@ const [password, setPassword] = useState<string>('');
               <CustomTextInput
                 label="Brand"
                 value={formData.brand}
-                onChangeText={(text) => handleFormDataChange('brand', text)}
+                onChangeText={formHandlers.brand}
                 placeholder="Enter brand"
                 refKey="editBrand"
                 nextRefKey="editLocation"
@@ -1684,7 +1847,7 @@ const [password, setPassword] = useState<string>('');
               <CustomTextInput
                 label="Location"
                 value={formData.location}
-                onChangeText={(text) => handleFormDataChange('location', text)}
+                onChangeText={formHandlers.location}
                 placeholder="Enter location"
                 refKey="editLocation"
                 nextRefKey="editSizes"
@@ -1697,7 +1860,7 @@ const [password, setPassword] = useState<string>('');
               <CustomTextInput
                 label="Sizes"
                 value={formData.sizes}
-                onChangeText={(text) => handleFormDataChange('sizes', text)}
+                onChangeText={formHandlers.sizes}
                 placeholder="Enter sizes (e.g., S,M,L)"
                 refKey="editSizes"
                 nextRefKey="editProductCode"
@@ -1710,7 +1873,7 @@ const [password, setPassword] = useState<string>('');
               <CustomTextInput
                 label="Product Code"
                 value={formData.productCode}
-                onChangeText={(text) => handleFormDataChange('productCode', text)}
+                onChangeText={formHandlers.productCode}
                 placeholder="Enter product code"
                 refKey="editProductCode"
                 nextRefKey="editOrderName"
@@ -1723,7 +1886,7 @@ const [password, setPassword] = useState<string>('');
               <CustomTextInput
                 label="Order Name"
                 value={formData.orderName}
-                onChangeText={(text) => handleFormDataChange('orderName', text)}
+                onChangeText={formHandlers.orderName}
                 placeholder="Enter order name"
                 refKey="editOrderName"
                 inputRefs={inputRefs}
@@ -1733,14 +1896,14 @@ const [password, setPassword] = useState<string>('');
 
               <ImageUploadComponent
                 imageUri={formData.image}
-                onImageChange={uri => handleFormDataChange('image', uri)}
+                onImageChange={formHandlers.image}
                 placeholder="Update product image"
                 style={styles.detailImageUpload}
               />
 
               <StatusSelector
                 status={formData.status}
-                onStatusChange={status => handleFormDataChange('status', status)}
+                onStatusChange={handleStatusChange}
               />
 
               <ErrorMessage error={error} />
